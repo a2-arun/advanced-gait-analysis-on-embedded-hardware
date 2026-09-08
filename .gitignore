@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+_scan_result.txt
+
+# Model weights - large binaries, fetched via docs/SETUP.md instead
+models/checkpoint/*.pth
+models/checkpoint/*.onnx
+models/checkpoint/*.engine
+models/pose_model/*.task
+
+# Runtime data - regenerated locally, never shared across machines
+database/*.db
+outputs/logs/*.log
+outputs/events/*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

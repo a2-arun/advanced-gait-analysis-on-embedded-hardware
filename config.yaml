@@ -1,0 +1,116 @@
+# Gait Edge Identification - Configuration
+# See docs/ARCHITECTURE.md for why these values are what they are.
+
+# ==============================================================================
+# Model
+# ==============================================================================
+model:
+  checkpoint_path: "models/checkpoint/full_hybrid_best.pth"
+
+  # Architecture params - MUST match the checkpoint exactly (verified against
+  # its state_dict in tests/test_model_loading.py). This is the "Full Hybrid"
+  # variant from the ablation study, NOT the create_model() defaults in
+  # models/full_pipeline.py (those are larger and will fail to load this
+  # checkpoint with a shape mismatch).
+  input_dim: 78                     # 36 coords + 6 angles + 36 velocities
+  encoder_hidden_dims: [64, 128]
+  encoder_output_dim: 128
+  lstm_hidden: 64
+  lstm_layers: 1
+  transformer_d_model: 128
+  transformer_heads: 4
+  transformer_layers: 2
+  embedding_dim: 128
+  verification_hidden: 64
+  dropout: 0.3
+
+  sequence_length: 60                # frames per gait sequence
+  device: "auto"                     # "cuda", "cpu", or "auto"
+
+  # The checkpoint has no saved feature_stats, so the reference inference
+  # pipeline it was validated against runs on RAW (non z-score-normalized)
+  # features. Do not normalize unless a future retrain saves feature_stats -
+  # normalizing an unnormalized-trained model changes its input distribution
+  # and was never evaluated.
+  normalize_features: false
+
+# ==============================================================================
+# Identification
+# ==============================================================================
+# The model's only validated matching mechanism is the difference-based
+# verification head (see docs/ARCHITECTURE.md #4): it compares a query's raw
+# 78-dim feature sequence against ONE enrolled identity's raw feature sequence
+# and outputs P(same person). Live identification = run this against every
+# enrolled identity and take the best match above threshold.
+identification:
+  # Youden's J optimal operating point from LOOCV on the research dataset.
+  # This was calibrated for 1:1 verification, not N-way open-set
+  # identification - false-accept behavior may shift as the gallery grows.
+  # Re-check this once you have real enrollment data.
+  similarity_threshold: 0.7737
+
+  top_k_candidates: 3               # how many candidates to report for diagnostics
+
+# ==============================================================================
+# Database
+# ==============================================================================
+database:
+  path: "database/gait.db"
+  auto_init: true
+
+# ==============================================================================
+# Camera
+# ==============================================================================
+camera:
+  device_id: 0
+  fps_target: 30
+  resolution: [640, 480]
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+
+# ==============================================================================
+# Pose extraction
+# ==============================================================================
+pose:
+  num_landmarks: 12                  # gait-relevant subset of MediaPipe's 33
+  frame_skip: 1                      # 1 = process every frame
+
+# ==============================================================================
+# Sequence assembly
+# ==============================================================================
+sequence:
+  length: 60                         # frames a sequence is resampled to before inference
+  min_valid_frames: 20               # don't attempt a sequence with fewer real pose detections
+
+# ==============================================================================
+# Enrollment
+# ==============================================================================
+enrollment:
+  min_sequences: 3                   # walk passes required to enroll someone
+  max_sequences: 5
+  quality_threshold: 0.80            # min fraction of frames with a valid pose detection
+
+# ==============================================================================
+# Logging
+# ==============================================================================
+logging:
+  level: "INFO"
+  file: "outputs/logs/gait_identification.log"
+  console: true
+  max_size_mb: 100
+  backup_count: 5
+
+# ==============================================================================
+# Events (for downstream RPA)
+# ==============================================================================
+events:
+  output_dir: "outputs/events"
+  save_to_file: true
+  # webhook_url: "http://localhost:8000/events"
+
+# ==============================================================================
+# Development
+# ==============================================================================
+development:
+  debug: false
+  visualize_poses: false
