@@ -8,8 +8,11 @@ env/
 *.egg-info/
 _scan_result.txt
 
-# Model weights - large binaries, fetched via docs/SETUP.md instead
+# Model weights - large binaries. full_hybrid_best.pth (3.5MB) is small enough
+# to vendor directly so collaborators don't need the sibling research repo;
+# other checkpoint/export formats stay ignored unless deliberately added.
 models/checkpoint/*.pth
+!models/checkpoint/full_hybrid_best.pth
 models/checkpoint/*.onnx
 models/checkpoint/*.engine
 models/pose_model/*.task
