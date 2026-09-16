@@ -21,8 +21,10 @@ pip install -r requirements.txt
 
 ## 2. Get the model checkpoint
 
-The checkpoint is gitignored (large binary, doesn't belong in version
-control). Copy it from the research repository:
+`models/checkpoint/full_hybrid_best.pth` is committed directly in this repo
+(it's only 3.5MB) so you don't need access to the sibling research
+repository. If it's missing for some reason, and you do have that repo,
+copy it from there instead:
 
 ```bash
 cp "../Deepfake-Updated/DeepFake-Detection/outputs/ablation/full_hybrid_best.pth" \

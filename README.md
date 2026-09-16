@@ -81,8 +81,7 @@ See `docs/SETUP.md` for the full walkthrough. Short version:
 python -m venv .venv && .venv\Scripts\activate   # or source .venv/bin/activate
 pip install -r requirements.txt
 
-cp "../Deepfake-Updated/DeepFake-Detection/outputs/ablation/full_hybrid_best.pth" \
-   models/checkpoint/full_hybrid_best.pth
+# models/checkpoint/full_hybrid_best.pth is already committed in this repo
 
 python init_db.py
 python tests/test_model_loading.py
