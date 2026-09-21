@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.full_pipeline import GaitDeepfakeDetector
+from src.model.gait_model import load_checkpoint
 from src.utils.config import load_config, resolve_path
 
 MODEL_CONFIG = load_config()["model"]
@@ -53,7 +54,7 @@ def test_checkpoint_loading():
         return False
 
     try:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = load_checkpoint(checkpoint_path)
         print(f"[OK] Checkpoint loaded: {checkpoint_path}")
         print(f"  File size: {checkpoint_path.stat().st_size / 1024 / 1024:.1f} MB")
         print(f"  Checkpoint keys: {', '.join(checkpoint.keys())}")
@@ -172,7 +173,7 @@ def test_model_state_loading():
     try:
         model = build_model()
         checkpoint_path = resolve_path(MODEL_CONFIG["checkpoint_path"])
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = load_checkpoint(checkpoint_path)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         print("[OK] Weights loaded from checkpoint")

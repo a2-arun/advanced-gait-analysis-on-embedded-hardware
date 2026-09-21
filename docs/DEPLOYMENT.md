@@ -1,10 +1,11 @@
 # Jetson Nano Deployment
 
-**Status: not started.** The Nano isn't in hand yet. This document exists
-so that when it arrives, the first steps are "inspect, then decide" rather
-than "install the newest thing and see what breaks." Get the laptop
-pipeline (`docs/SETUP.md`) fully working first - it's the thing that gets
-ported, not redesigned, once there's hardware to test on.
+**Status: install path written, not yet run on the device.** The step-by-step
+install is in the "Jetson Nano" section of the top-level `README.md`
+(uses `requirements-jetson.txt`). This document keeps the background: what
+was risky and why the choices there were made. The risk list below is the
+original pre-hardware analysis; where README.md and this file disagree,
+README.md is current.
 
 ## What "Jetson Nano" means here
 

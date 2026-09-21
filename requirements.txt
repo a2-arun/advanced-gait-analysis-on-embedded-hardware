@@ -1,6 +1,7 @@
 # Laptop development environment (Windows/Linux/macOS).
-# Jetson Nano (Ubuntu 18.04, JetPack 4.x, Python 3.6) needs its OWN pinned
-# set - these wheels do not exist for that platform. See docs/DEPLOYMENT.md.
+# Do NOT use this file on a Jetson Nano (Python 3.6): torch>=2.1 and
+# mediapipe>=0.10 do not exist for that platform, so pip reports "no matching
+# distribution". Use requirements-jetson.txt and the Jetson section of README.md.
 
 torch>=2.1
 numpy>=1.24

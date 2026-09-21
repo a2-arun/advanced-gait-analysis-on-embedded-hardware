@@ -35,6 +35,16 @@ class IdentificationResult:
         return self.identified_name is not None
 
 
+def load_checkpoint(path, map_location="cpu") -> dict:
+    """torch.load that works on both new torch (needs weights_only=False for a
+    checkpoint holding a metrics dict) and Jetson's torch 1.10, which predates
+    the weights_only argument."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
 class GaitModel:
     def __init__(self, config: Optional[dict] = None):
         self.config = (config or load_config())["model"]
@@ -71,7 +81,7 @@ class GaitModel:
                 "See docs/SETUP.md to copy it from the research repository."
             )
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        checkpoint = load_checkpoint(checkpoint_path, map_location=self.device)
         model.load_state_dict(checkpoint["model_state_dict"])
         model = model.to(self.device)
 

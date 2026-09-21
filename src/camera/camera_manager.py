@@ -21,7 +21,11 @@ class CameraManager:
         self._cap: Optional[cv2.VideoCapture] = None
 
     def open(self) -> None:
-        self._cap = cv2.VideoCapture(self.device_id)
+        if isinstance(self.device_id, str):
+            # GStreamer pipeline string, e.g. a Jetson CSI camera (see config.yaml)
+            self._cap = cv2.VideoCapture(self.device_id, cv2.CAP_GSTREAMER)
+        else:
+            self._cap = cv2.VideoCapture(self.device_id)
         if not self._cap.isOpened():
             raise RuntimeError(f"Could not open camera device {self.device_id}")
 

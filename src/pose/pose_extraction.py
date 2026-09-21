@@ -21,8 +21,14 @@ import pickle
 from typing import Dict, List, Optional
 
 import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+
+try:
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+except ImportError:
+    # mediapipe 0.8.x (the newest build available for Jetson Nano / Python 3.6,
+    # see docs/JETSON.md) has no Tasks API - fall back to mp.solutions.pose.
+    vision = None
 
 
 class GaitFeatureExtractor:
@@ -66,18 +72,32 @@ class GaitFeatureExtractor:
             min_tracking_confidence: Minimum confidence for pose tracking
             sequence_length: Fixed sequence length for output (frames)
         """
-        # Download model if needed
-        model_path = self._get_pose_model(min_detection_confidence, min_tracking_confidence)
-        
-        # Create PoseLandmarker with options
-        # Use IMAGE mode for frame-by-frame processing via detect()
-        options = vision.PoseLandmarkerOptions(
-            base_options=python.BaseOptions(model_asset_path=model_path),
-            running_mode=vision.RunningMode.IMAGE,
-            min_pose_detection_confidence=min_detection_confidence,
-            min_pose_presence_confidence=min_tracking_confidence
-        )
-        self.landmarker = vision.PoseLandmarker.create_from_options(options)
+        self.landmarker = None
+        self._legacy_pose = None
+
+        if vision is None:
+            # Legacy backend (Jetson). model_complexity=0 is the "lite" model,
+            # same as pose_landmarker_lite below. static_image_mode=False runs
+            # the detector once then tracks - much faster on the Nano.
+            self._legacy_pose = mp.solutions.pose.Pose(
+                static_image_mode=False,
+                model_complexity=0,
+                min_detection_confidence=min_detection_confidence,
+                min_tracking_confidence=min_tracking_confidence,
+            )
+        else:
+            # Download model if needed
+            model_path = self._get_pose_model(min_detection_confidence, min_tracking_confidence)
+
+            # Create PoseLandmarker with options
+            # Use IMAGE mode for frame-by-frame processing via detect()
+            options = vision.PoseLandmarkerOptions(
+                base_options=python.BaseOptions(model_asset_path=model_path),
+                running_mode=vision.RunningMode.IMAGE,
+                min_pose_detection_confidence=min_detection_confidence,
+                min_pose_presence_confidence=min_tracking_confidence
+            )
+            self.landmarker = vision.PoseLandmarker.create_from_options(options)
         self.sequence_length = sequence_length
     
     def _get_pose_model(self, min_det_conf: float, min_track_conf: float) -> str:
@@ -118,18 +138,25 @@ class GaitFeatureExtractor:
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Create Image object for MediaPipe
-        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        
-        # Detect pose
-        detection_result = self.landmarker.detect(image)
-        
-        if not detection_result.pose_landmarks or len(detection_result.pose_landmarks) == 0:
-            return None
-        
-        # Extract landmarks (take first detected person)
-        pose_landmarks = detection_result.pose_landmarks[0]
-        
+        if self._legacy_pose is not None:
+            rgb_frame.flags.writeable = False  # lets mediapipe skip a copy
+            result = self._legacy_pose.process(rgb_frame)
+            if result.pose_landmarks is None:
+                return None
+            pose_landmarks = result.pose_landmarks.landmark
+        else:
+            # Create Image object for MediaPipe
+            image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+            # Detect pose
+            detection_result = self.landmarker.detect(image)
+
+            if not detection_result.pose_landmarks or len(detection_result.pose_landmarks) == 0:
+                return None
+
+            # Extract landmarks (take first detected person)
+            pose_landmarks = detection_result.pose_landmarks[0]
+
         # Convert to numpy array
         landmarks = np.array([
             [lm.x, lm.y, lm.z]
@@ -385,7 +412,8 @@ class GaitFeatureExtractor:
     def close(self):
         """Release MediaPipe resources."""
         # PoseLandmarker handles cleanup automatically with new API
-        pass
+        if self._legacy_pose is not None:
+            self._legacy_pose.close()
 
 
 def extract_features_from_dataset(input_dir: str, 
