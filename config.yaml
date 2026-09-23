@@ -66,7 +66,19 @@ camera:
   # replace it with this GStreamer pipeline string (keep it on ONE line):
   # device_id: "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=1280, height=720, framerate=30/1 ! nvvidconv ! video/x-raw, width=640, height=480, format=BGRx ! videoconvert ! video/x-raw, format=BGR ! appsink drop=1"
   device_id: 0
+
+  # Second USB webcam for multi-angle capture (see docs/DUAL_CAMERA.md and
+  # scripts/test_dual_camera.py / scripts/identify_dual.py). Leave as null
+  # for single-camera setups - CameraManager/identify.py ignore this field.
+  # On the Jetson Nano, check `ls /dev/video*` after plugging both cameras
+  # in; it's usually 1 (0 and 1), but confirm rather than assume.
+  secondary_device_id: null
+
   fps_target: 30
+  # 480p (640x480), not 720p. This keeps per-camera USB bandwidth and
+  # MediaPipe CPU cost low enough to run two cameras at once on a Jetson
+  # Nano - see docs/DUAL_CAMERA.md. Only raise this if you've confirmed
+  # your hardware (laptop or Nano, single or dual camera) keeps up.
   resolution: [640, 480]
   min_detection_confidence: 0.5
   min_tracking_confidence: 0.5

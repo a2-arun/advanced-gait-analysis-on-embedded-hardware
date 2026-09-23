@@ -70,6 +70,7 @@ docs/
   ARCHITECTURE.md          # what's actually true about the model/pipeline, and why
   SETUP.md                 # laptop setup, step by step
   DEPLOYMENT.md             # Jetson background: compatibility risks and why
+  DUAL_CAMERA.md             # two-camera capture (this branch): setup, and why 480p not 720p
   phase-reports/            # historical planning docs, superseded by ARCHITECTURE.md
 
 tests/
