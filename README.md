@@ -330,6 +330,20 @@ is building MediaPipe from source on the Nano (many hours), or replacing
 pose estimation with `trt_pose` (different landmarks - would need the 78-dim
 feature builder adapted and the model re-validated). See `docs/DEPLOYMENT.md`.
 
+**`enroll.py`/`identify.py` crash with `HTTPError: HTTP Error 404: Not
+Found`, "Downloading model to .../mediapipe/modules/pose_landmark/
+pose_landmark_lite.tflite".** mediapipe 0.8.5's legacy `mp.solutions.pose`
+auto-downloads that `.tflite` from `github.com/google/mediapipe/raw/master/`
+on first use - that repo has since moved to `google-ai-edge/mediapipe` and
+the old master-relative path 404s. Fix: download the file once from a tag
+that still has it, and drop it at the exact path the traceback names (skips
+the broken download - mediapipe uses the local copy if it's already there):
+
+```bash
+wget -O .venv/lib/python3.6/site-packages/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite \
+    https://raw.githubusercontent.com/google-ai-edge/mediapipe/v0.8.9/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite
+```
+
 ---
 
 ## Laptop quick start
