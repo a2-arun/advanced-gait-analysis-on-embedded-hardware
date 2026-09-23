@@ -272,7 +272,11 @@ counter for the current pass, and a green border while you're tracked (red
 each pass; press `q` in the window to cancel without saving. Over SSH it
 falls back to terminal-only automatically; add `--no-display` to force that,
 or `export DISPLAY=:0` first to show the window on the Nano's monitor.
-`identify.py` has no preview.
+
+`identify.py` opens the same kind of preview (skeleton, tracking border,
+`Enrolled: N`, frame counter) and keeps the latest result at the bottom:
+the name and similarity in green, or `UNKNOWN (0.61)` in orange. Press
+`q` to stop. It supports the same `--no-display` flag and SSH fallback.
 
 To remove a test enrollment:
 
@@ -335,8 +339,7 @@ it. CSI: `sudo systemctl restart nvargus-daemon`, reseat the ribbon cable
 with the board powered off, and re-run the `gst-launch-1.0` check.
 
 **`cv2.imshow` errors over SSH.** No display attached. Use
-`python3 scripts/test_camera.py --no-display` / `python3 scripts/enroll.py
---name X --no-display`. `identify.py` never opens a window.
+`--no-display` on `test_camera.py`, `enroll.py` or `identify.py`.
 
 **MediaPipe wheel download fails or `mp.solutions.pose` is missing.** The
 PINTO0309 download script pulls from an external host and can rot. Fallback

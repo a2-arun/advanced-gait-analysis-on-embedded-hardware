@@ -14,47 +14,11 @@ from src.features.gait_features import CapturedSequence, LiveSequenceBuffer, ave
 from src.pose.pose_extraction import GaitFeatureExtractor
 from src.utils.config import load_config
 from src.utils.logger import get_logger
+from src.utils.preview import GREEN, ORANGE, draw_preview
 
 logger = get_logger(__name__)
 
 PREVIEW_WINDOW = "Enrollment - press q to cancel"
-_BONES = [(11, 12), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26),
-          (26, 28), (27, 29), (29, 31), (27, 31), (28, 30), (30, 32), (28, 32)]
-_GREEN, _RED, _WHITE = (0, 200, 0), (0, 0, 255), (255, 255, 255)
-
-
-def _draw_preview(frame, landmarks, passes_done, passes_max, frames_in_buffer,
-                  frames_needed, flash_text):
-    h, w = frame.shape[:2]
-    tracking = landmarks is not None
-    color = _GREEN if tracking else _RED
-
-    if tracking:
-        pts = {i: (int(landmarks[i][0] * w), int(landmarks[i][1] * h))
-               for i in GaitFeatureExtractor.GAIT_LANDMARKS}
-        for a, b in _BONES:
-            cv2.line(frame, pts[a], pts[b], _GREEN, 2)
-        for p in pts.values():
-            cv2.circle(frame, p, 4, _WHITE, -1)
-
-    cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, 6)
-    status = "TRACKING" if tracking else "NO POSE - get full body in view"
-    lines = [
-        "Pass {}/{}".format(passes_done, passes_max),
-        "Frames {}/{}".format(min(frames_in_buffer, frames_needed), frames_needed),
-        status,
-    ]
-    for i, text in enumerate(lines):
-        y = 30 + i * 28
-        cv2.putText(frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
-        cv2.putText(frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    color if i == 2 else _WHITE, 2)
-
-    if flash_text:
-        cv2.putText(frame, flash_text, (12, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 5)
-        cv2.putText(frame, flash_text, (12, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, _GREEN, 2)
-
-    cv2.imshow(PREVIEW_WINDOW, frame)
 
 
 @dataclass
@@ -91,7 +55,7 @@ def enroll_from_camera(
 
     captured: List[CapturedSequence] = []
     cancelled = False
-    flash_text, flash_frames_left = "", 0
+    flash_text, flash_color, flash_frames_left = "", GREEN, 0
 
     try:
         with CameraManager(config) as camera:
@@ -112,18 +76,22 @@ def enroll_from_camera(
                             enrollment_cfg["quality_threshold"] * 100,
                         )
                         flash_text = "Pass rejected ({:.0%}) - walk again".format(result.pose_quality)
+                        flash_color = ORANGE
                     else:
                         captured.append(result)
                         if on_sequence_captured:
                             on_sequence_captured(len(captured), result)
                         flash_text = "Pass {} captured ({:.0%})".format(len(captured), result.pose_quality)
+                        flash_color = GREEN
                     flash_frames_left = 45
 
                 if show_preview:
-                    _draw_preview(
-                        frame, buffer.last_landmarks, len(captured),
-                        enrollment_cfg["max_sequences"], buffer.valid_frame_count,
-                        buffer.frames_needed, flash_text if flash_frames_left > 0 else "",
+                    needed = buffer.frames_needed
+                    draw_preview(
+                        frame, buffer.last_landmarks, PREVIEW_WINDOW,
+                        ["Pass {}/{}".format(len(captured), enrollment_cfg["max_sequences"]),
+                         "Frames {}/{}".format(min(buffer.valid_frame_count, needed), needed)],
+                        flash_text if flash_frames_left > 0 else "", flash_color,
                     )
                     flash_frames_left -= 1
                     if cv2.waitKey(1) & 0xFF == ord("q"):

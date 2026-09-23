@@ -4,6 +4,7 @@
 Usage:
     python scripts/identify.py
     python scripts/identify.py --device-id jetson-01   # tag events by device
+    python scripts/identify.py --no-display            # over SSH / no monitor
 """
 
 import argparse
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.identification.identifier import GaitIdentifier
 from src.model.gait_model import IdentificationResult
 from src.utils.config import load_config
+from src.utils.preview import display_available
 
 
 def print_result(result: IdentificationResult) -> None:
@@ -31,7 +33,15 @@ def print_result(result: IdentificationResult) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Live gait identification")
     parser.add_argument("--device-id", default="laptop", help="Label for this device in logs/events")
+    parser.add_argument("--no-display", action="store_true",
+                        help="Don't open the live preview window")
     args = parser.parse_args()
+
+    show_preview = not args.no_display
+    if show_preview and not display_available():
+        print("No display found (SSH?) - running without preview. "
+              "Use `export DISPLAY=:0` to show it on the board's monitor.")
+        show_preview = False
 
     config = load_config()
 
@@ -42,9 +52,9 @@ def main() -> int:
             return 1
 
         print(f"{gallery_size} identities enrolled. Watching for a walking subject "
-              "(Ctrl+C to stop)...\n")
+              f"({'q in the window or ' if show_preview else ''}Ctrl+C to stop)...\n")
         try:
-            identifier.run(on_result=print_result)
+            identifier.run(on_result=print_result, show_preview=show_preview)
         except KeyboardInterrupt:
             print("\nStopped.")
         return 0

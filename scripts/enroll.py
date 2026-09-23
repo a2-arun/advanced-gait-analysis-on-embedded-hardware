@@ -7,7 +7,6 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -15,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.enrollment.enrollment_manager import enroll_from_camera
 from src.utils.config import load_config
+from src.utils.preview import display_available
 
 
 def main() -> int:
@@ -25,7 +25,7 @@ def main() -> int:
     args = parser.parse_args()
 
     show_preview = not args.no_display
-    if show_preview and sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+    if show_preview and not display_available():
         print("No display found (SSH?) - running without preview. "
               "Use `export DISPLAY=:0` to show it on the board's monitor.")
         show_preview = False
