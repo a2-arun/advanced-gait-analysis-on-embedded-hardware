@@ -44,6 +44,11 @@ class LiveSequenceBuffer:
 
         self._landmarks: List[np.ndarray] = []
         self._total_frames_seen = 0
+        self.last_landmarks: Optional[np.ndarray] = None
+
+    @property
+    def frames_needed(self) -> int:
+        return max(self.min_valid_frames, self.sequence_length // 2)
 
     def reset(self) -> None:
         self._landmarks = []
@@ -59,14 +64,15 @@ class LiveSequenceBuffer:
         """
         self._total_frames_seen += 1
         landmarks = self.extractor.extract_pose_from_frame(frame)
+        self.last_landmarks = landmarks
 
         if landmarks is not None:
             self._landmarks.append(landmarks)
 
         ready = (
-            len(self._landmarks) >= self.min_valid_frames
-            and len(self._landmarks) >= self.sequence_length // 2
-        ) or len(self._landmarks) >= self.max_buffer_frames
+            len(self._landmarks) >= self.frames_needed
+            or len(self._landmarks) >= self.max_buffer_frames
+        )
 
         if not ready:
             return None

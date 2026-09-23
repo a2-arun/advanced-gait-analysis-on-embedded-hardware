@@ -266,6 +266,20 @@ python3 scripts/enroll.py --name "Bob"          # enroll at least one more perso
 python3 scripts/identify.py --device-id jetson-nano-01
 ```
 
+`enroll.py` opens a live preview: skeleton overlay, `Pass N/5`, a frame
+counter for the current pass, and a green border while you're tracked (red
+= no pose - get your whole body in view). "Pass N captured" flashes after
+each pass; press `q` in the window to cancel without saving. Over SSH it
+falls back to terminal-only automatically; add `--no-display` to force that,
+or `export DISPLAY=:0` first to show the window on the Nano's monitor.
+`identify.py` has no preview.
+
+To remove a test enrollment:
+
+```bash
+python3 -c "from src.database.gait_database import GaitDatabase; GaitDatabase().delete_identity('Alice')"
+```
+
 ### 12. Where the output is
 
 | What | Where |
@@ -321,8 +335,8 @@ it. CSI: `sudo systemctl restart nvargus-daemon`, reseat the ribbon cable
 with the board powered off, and re-run the `gst-launch-1.0` check.
 
 **`cv2.imshow` errors over SSH.** No display attached. Use
-`python scripts/test_camera.py --no-display`. `enroll.py` and `identify.py`
-never open a window.
+`python3 scripts/test_camera.py --no-display` / `python3 scripts/enroll.py
+--name X --no-display`. `identify.py` never opens a window.
 
 **MediaPipe wheel download fails or `mp.solutions.pose` is missing.** The
 PINTO0309 download script pulls from an external host and can rot. Fallback
