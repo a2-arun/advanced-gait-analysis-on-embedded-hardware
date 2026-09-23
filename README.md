@@ -194,8 +194,8 @@ pip install torch-1.10.0-cp36-cp36m-linux_aarch64.whl
 Check (the second line must print `True`):
 
 ```bash
-python -c "import torch; print(torch.__version__)"                 # 1.10.0
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python3 -c "import torch; print(torch.__version__)"                 # 1.10.0
+python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
 Do **not** `pip install torch` from PyPI on the Nano - those wheels have no
@@ -219,7 +219,7 @@ pip install --no-deps "$(find ~/mediapipe-bin -name 'mediapipe-0.8.5_cuda102-cp3
 Check that pose is present:
 
 ```bash
-python -c "import mediapipe as mp; print(mp.__version__, mp.solutions.pose.Pose)"
+python3 -c "import mediapipe as mp; print(mp.__version__, mp.solutions.pose.Pose)"
 ```
 
 If it says `No module named 'X'`, `pip install X` and retry (the wheel was
@@ -228,8 +228,8 @@ installed without dependency resolution).
 ### 9. Verify the model loads and runs (uses the GPU automatically)
 
 ```bash
-python init_db.py
-python tests/test_model_loading.py
+python3 init_db.py
+python3 tests/test_model_loading.py
 ```
 
 Expected: every test prints `[OK] PASS`, and Test 5 reports
@@ -251,8 +251,8 @@ gst-launch-1.0 nvarguscamerasrc num-buffers=60 ! 'video/x-raw(memory:NVMM),width
 Then test through the project:
 
 ```bash
-python scripts/test_camera.py                  # with a monitor on HDMI: live preview, press q
-python scripts/test_camera.py --no-display     # over SSH / no monitor: grabs 100 frames, saves outputs/camera_test.jpg
+python3 scripts/test_camera.py                  # with a monitor on HDMI: live preview, press q
+python3 scripts/test_camera.py --no-display     # over SSH / no monitor: grabs 100 frames, saves outputs/camera_test.jpg
 ```
 
 ### 11. Enroll people, then identify
@@ -261,9 +261,9 @@ Stand 2-3 m from the camera so your **whole body** (head to feet) is in
 frame, in decent light, and walk **across** the view.
 
 ```bash
-python scripts/enroll.py --name "Alice"        # walk across 3-5 times when prompted
-python scripts/enroll.py --name "Bob"          # enroll at least one more person to test UNKNOWN/match
-python scripts/identify.py --device-id jetson-nano-01
+python3 scripts/enroll.py --name "Alice"        # walk across 3-5 times when prompted
+python3 scripts/enroll.py --name "Bob"          # enroll at least one more person to test UNKNOWN/match
+python3 scripts/identify.py --device-id jetson-nano-01
 ```
 
 ### 12. Where the output is
