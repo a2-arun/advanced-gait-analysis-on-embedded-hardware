@@ -34,9 +34,10 @@ def main() -> int:
     enrollment_cfg = config["enrollment"]
 
     print(f"Enrolling '{args.name}'.")
-    print(f"Walk across the camera's view {enrollment_cfg['min_sequences']}-"
-          f"{enrollment_cfg['max_sequences']} times. Each pass needs a clear, "
-          "unobstructed full-body view.\n")
+    print(f"Walk TOWARD the camera {enrollment_cfg['min_sequences']}-"
+          f"{enrollment_cfg['max_sequences']} times (start far back, 2-3 s per pass). "
+          "Keep your whole body, feet included, in view. Walk the same way "
+          "when identifying - the model is much weaker across views.\n")
 
     def on_captured(index, result):
         print(f"  Pass {index} captured (pose quality: {result.pose_quality:.0%})")

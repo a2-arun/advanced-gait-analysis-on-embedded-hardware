@@ -34,7 +34,7 @@ def load_config(path: Optional[Path] = None, force_reload: bool = False) -> dict
 
 
 def resolve_path(relative_path: str) -> Path:
-    """Resolve a config path (e.g. 'models/checkpoint/full_hybrid_best.pth')
+    """Resolve a config path (e.g. 'models/checkpoint/gaitgraph2_oumvlp.pth')
     against the project root, so scripts work regardless of cwd."""
     p = Path(relative_path)
     return p if p.is_absolute() else PROJECT_ROOT / p

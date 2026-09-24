@@ -33,7 +33,6 @@ class GaitIdentifier:
         self.extractor = GaitFeatureExtractor(
             min_detection_confidence=self.config["camera"]["min_detection_confidence"],
             min_tracking_confidence=self.config["camera"]["min_tracking_confidence"],
-            sequence_length=self.config["sequence"]["length"],
         )
         self.db = GaitDatabase(self.config)
 
@@ -47,10 +46,15 @@ class GaitIdentifier:
     def __exit__(self, *exc_info) -> None:
         self.close()
 
-    def identify_sequence(self, captured: CapturedSequence) -> IdentificationResult:
+    def identify_sequence(self, captured: CapturedSequence) -> Optional[IdentificationResult]:
+        """Returns None if the walk was too short to embed (nothing is logged)."""
         gallery = self.db.get_gallery()
         start = time.perf_counter()
-        result = self.model.identify(captured.model_input, gallery)
+        embedding = self.model.embed(captured.poses, captured.timestamps, captured.frame_size)
+        if embedding is None:
+            logger.info("Walk too short to identify (%d frames), skipping", len(captured.poses))
+            return None
+        result = self.model.identify(embedding, gallery)
         processing_time_ms = (time.perf_counter() - start) * 1000
 
         self.db.log_identification_event(
@@ -86,18 +90,14 @@ class GaitIdentifier:
 
         try:
             with CameraManager(self.config) as camera:
-                buffer = LiveSequenceBuffer(
-                    self.extractor,
-                    sequence_length=sequence_cfg["length"],
-                    min_valid_frames=sequence_cfg["min_valid_frames"],
-                )
+                buffer = LiveSequenceBuffer(self.extractor, sequence_cfg["min_valid_frames"])
 
                 iterations = 0
                 for frame in camera.frames():
                     captured = buffer.add_frame(frame)
 
-                    if captured is not None:
-                        result = self.identify_sequence(captured)
+                    result = self.identify_sequence(captured) if captured is not None else None
+                    if result is not None:
                         if on_result:
                             on_result(result)
                         if result.is_identified:

@@ -1,5 +1,6 @@
 """Drives the "walk in front of the camera a few times" enrollment flow:
-capture N gait sequences, average them into one signature, store it.
+capture N walks, embed each with the gait model, average the embeddings
+into one signature, store it.
 """
 
 from dataclasses import dataclass
@@ -10,7 +11,8 @@ import numpy as np
 
 from src.camera.camera_manager import CameraManager
 from src.database.gait_database import GaitDatabase
-from src.features.gait_features import CapturedSequence, LiveSequenceBuffer, average_sequences
+from src.features.gait_features import CapturedSequence, LiveSequenceBuffer
+from src.model.gait_model import GaitModel
 from src.pose.pose_extraction import GaitFeatureExtractor
 from src.utils.config import load_config
 from src.utils.logger import get_logger
@@ -36,7 +38,7 @@ def enroll_from_camera(
     show_preview: bool = False,
 ) -> EnrollmentOutcome:
     """Capture config['enrollment']['min_sequences']..max_sequences walk
-    passes from the live camera and enroll the averaged signature.
+    passes from the live camera and enroll their averaged embedding.
 
     on_sequence_captured(index, sequence) fires after each captured pass,
     e.g. so a CLI can print progress or a UI can show a checkmark.
@@ -47,28 +49,26 @@ def enroll_from_camera(
     enrollment_cfg = config["enrollment"]
     sequence_cfg = config["sequence"]
 
+    model = GaitModel(config)
     extractor = GaitFeatureExtractor(
         min_detection_confidence=config["camera"]["min_detection_confidence"],
         min_tracking_confidence=config["camera"]["min_tracking_confidence"],
-        sequence_length=sequence_cfg["length"],
     )
 
     captured: List[CapturedSequence] = []
+    embeddings: List[np.ndarray] = []
     cancelled = False
     flash_text, flash_color, flash_frames_left = "", GREEN, 0
 
     try:
         with CameraManager(config) as camera:
-            buffer = LiveSequenceBuffer(
-                extractor,
-                sequence_length=sequence_cfg["length"],
-                min_valid_frames=sequence_cfg["min_valid_frames"],
-            )
+            buffer = LiveSequenceBuffer(extractor, sequence_cfg["min_valid_frames"])
 
             for frame in camera.frames():
                 result = buffer.add_frame(frame)
 
                 if result is not None:
+                    embedding = model.embed(result.poses, result.timestamps, result.frame_size)
                     if result.pose_quality < enrollment_cfg["quality_threshold"]:
                         logger.warning(
                             "Discarding low-quality pass (%.0f%% valid frames < %.0f%% required)",
@@ -77,7 +77,12 @@ def enroll_from_camera(
                         )
                         flash_text = "Pass rejected ({:.0%}) - walk again".format(result.pose_quality)
                         flash_color = ORANGE
+                    elif embedding is None:
+                        logger.warning("Discarding pass: walk too short to embed")
+                        flash_text = "Pass too short - walk again"
+                        flash_color = ORANGE
                     else:
+                        embeddings.append(embedding)
                         captured.append(result)
                         if on_sequence_captured:
                             on_sequence_captured(len(captured), result)
@@ -115,7 +120,7 @@ def enroll_from_camera(
             "better lighting/framing, or lower enrollment.quality_threshold."
         )
 
-    signature = average_sequences([c.model_input for c in captured])
+    signature = model.make_signature(embeddings)
     average_quality = float(np.mean([c.pose_quality for c in captured]))
 
     with GaitDatabase(config) as db:

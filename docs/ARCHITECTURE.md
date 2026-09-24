@@ -1,118 +1,120 @@
 # Architecture
 
-This document records what was actually verified by inspecting the research
-repository and the checkpoint itself, as opposed to what earlier planning
-documents assumed. Where the two disagree, this file and the code follow the
-verified behavior. See `docs/phase-reports/` for the superseded plans.
+This document records what was verified by running the code and measuring,
+as opposed to what earlier planning assumed. Where the two disagree, this
+file and the code follow the measurements. See `docs/phase-reports/` for the
+superseded plans.
 
-## 1. Relationship to the research project
+## 1. What this project does
 
-The research project (`Deepfake-Detection`, sibling repo) asks: *"does this
-video's walk match the person it claims to be?"* — a 1:1 **verification**
-task used to catch face-swapped video (the face says A, but gait says B).
+*"Who is walking in front of this camera right now?"* - open-set
+identification: compare a live walk against everyone enrolled and report the
+best match, or UNKNOWN if nobody clears the threshold.
 
-This project asks a different question: *"who is walking in front of this
-camera right now?"* — an open-set **identification** task. A live camera
-feed can't be a deepfake (there's no video file to swap a face onto), so the
-authenticity-verification framing doesn't apply here. What carries over is
-the gait representation and the trained model that scores "does this gait
-match that enrolled signature" — identification is just that scoring
-function run against every enrolled person instead of one claimed identity.
-
-Reused as-is: the 78-dim feature engineering (`src/pose/pose_extraction.py`,
-ported from the research repo's `utils/pose_extraction.py`) and the trained
-checkpoint (`models/checkpoint/full_hybrid_best.pth`, copied from
-`outputs/ablation/full_hybrid_best.pth`).
-New in this project: everything that turns those into a live pipeline -
-camera capture, sequence buffering, the identification/enrollment
-orchestration, the SQLite gallery, and event emission.
+The gait model is **GaitGraph2** (Teepe et al., ResGCN-N51-R4, trained on
+OUMVLP-Pose, ~10,000 subjects), used as-is with its released weights - no
+training on our data. New in this project: everything that turns it into a
+live pipeline - camera capture, walk buffering, the MediaPipe-to-OpenPose
+input mapping, enrollment/identification orchestration, the SQLite gallery,
+and event emission.
 
 ## 2. Pipeline
 
 ```
 Camera frame
-    -> Pose extraction (MediaPipe, 33 landmarks -> 12 gait-relevant)
-    -> Rolling sequence buffer (src/features/gait_features.py)
-    -> Resample to 60 frames, compute 78-dim/frame features
-    -> GaitModel.identify() against the enrolled gallery (src/model/gait_model.py)
+    -> MediaPipe pose, 33 landmarks + capture timestamp (src/pose, src/features)
+    -> ~2-3 s of walking buffered (config sequence.min_valid_frames)
+    -> GaitModel.embed() (src/model/gait_model.py):
+         resample to 25 fps -> 30-frame windows (stride 8)
+         -> each window: OpenPose-18 joints in OUMVLP pixel space
+         -> joints/velocity/bones multi-input -> ResGCN
+         -> 3 test-time views (as-is, time-reversed, left/right-swapped) concatenated
+         -> mean over windows -> 384-d unit vector
+    -> GaitModel.identify(): centered cosine vs every enrolled signature
     -> IdentificationResult -> IdentityEvent (src/events/identity_event.py)
 ```
 
-## 3. The 78-dim feature vector
+Enrollment embeds each accepted walk pass and stores the mean as the
+person's signature (`gait_embeddings`, one 384-float row).
 
-Per frame, concatenated in this exact order (order matters - it must match
-what the checkpoint was trained on):
+## 3. Input mapping - the part that has to match training
 
-| Component | Dims | Source |
-|---|---|---|
-| Hip-centered 3D coordinates | 36 (12 x 3) | 12 gait landmarks: shoulders, hips, knees, ankles, heels, foot-tips |
-| Joint flexion angles | 6 | knee/hip/ankle, left+right |
-| Frame-to-frame velocities | 36 (12 x 3) | first derivative of the coordinates above |
+GaitGraph2 was trained on OpenPose/AlphaPose keypoints in OUMVLP's 1280x980
+video frames. We feed MediaPipe landmarks instead, so `gait_model.py` maps
+them onto what the checkpoint expects:
 
-Sequences are resampled to 60 frames via linear interpolation on the raw
-landmarks *before* angles/velocities are computed (not after) -
-`GaitFeatureExtractor.sequence_to_model_input()` is the single place this
-happens, used by both offline video processing and the live camera buffer,
-specifically so the two paths can't drift apart.
+- **Joints:** OpenPose-18 order; the neck (no MediaPipe landmark) is the
+  shoulder midpoint.
+- **Scale and position:** per 30-frame window, converted to pixels, then
+  scaled/shifted so the joints match the checkpoint's input BatchNorm
+  running statistics (x ~677, y ~460, spread of y relative to the neck ~81).
+  Per window, not per walk: walking toward the camera the body grows in the
+  frame, and one scale for the whole walk cost ~9 points of accuracy.
+- **Confidence:** MediaPipe has none per joint, so every joint gets the
+  training mean (0.624), which the input BatchNorm maps to zero.
+- **Frame rate:** OUMVLP is 25 fps. Live frames are timestamped and
+  resampled, because the camera's effective rate drifts with CPU load.
+- **Multi-input features:** `multi_input()` reproduces GaitGraph2's
+  `transforms/multi_input.py` bit-for-bit (verified to 2e-7), quirks
+  included.
 
-## 4. Why identification uses the verification head, not embeddings+cosine
+The ResGCN code in `src/model/resgcn/` is vendored from GaitGraph v1 (MIT),
+which is identical to GaitGraph2's copy except `forward`; GaitGraph2's
+forward lives in `GaitModel._forward`. The GaitGraph2 weights carry no
+license, so they aren't committed - `scripts/convert_gaitgraph2.py` turns
+the release zip into `models/checkpoint/gaitgraph2_oumvlp.pth`.
 
-The model produces a 128-dim embedding via `GaitEncoder -> BiLSTM/Transformer
-fusion`, and there's a separate `IdentityVerifier` module built around
-cosine similarity between two projected embeddings. **Neither of those is
-what the checkpoint's `forward(mode='verification')` actually uses.**
+## 4. How it was validated, and what the numbers are
 
-Reading `models/full_pipeline.py`'s verification branch: it computes
-`diff`, `abs_diff`, and `product` directly from the two RAW 78-dim feature
-sequences (query vs. candidate), feeds that through a small 1D CNN
-(`diff_conv` + `diff_classifier`), and outputs `P(same person)`. The 128-dim
-embedding is computed alongside but never enters this calculation - it's
-there for diagnostics and the standalone classifier mode.
+`scripts/eval_research_videos.py` runs the live pipeline's own code over the
+66 videos of 13 subjects in the sibling `deepfake-detection` repo (F = walking
+toward the camera, S = side-on) and never trains on them.
 
-This isn't an oversight to fix; per the research team's own technical
-notes, the embedding-comparison approach was tried first and **collapsed
-during training** (the model learned to ignore the input). The
-difference-based CNN was what trained stably and produced the validated
-94.95% AUC-ROC / 0.7737 Youden's-J threshold. Building a new
-embedding+cosine matcher for this project would be building something never
-validated, using weights that were never optimized for it.
+| Test (front view, F) | Result |
+|---|---|
+| Leave-one-video-out, 13 people, same-view gallery | 76% rank-1 (chance 8%) |
+| 2 people enrolled: which of the two is walking | 94% |
+| 2 people enrolled: strangers vs enrolled (EER) | 24% at threshold 0.756 |
 
-Consequence for identification: `GaitModel.identify()` (`src/model/gait_model.py`)
-batches the query against every enrolled signature and runs the real
-verification forward pass N times (one per candidate), taking the argmax
-above threshold. This is cheap - `diff_conv`/`diff_classifier` is a small
-CNN, and the model is ~850K parameters total - but it does mean matching
-cost scales with gallery size, unlike a cosine-similarity lookup. Fine for
-the gallery sizes this project targets (tens of people); would need
-revisiting if the gallery ever reached the thousands.
+Side view (S) is much weaker: 46% rank-1, ~73% telling two apart, stranger
+EER ~40%. Across views (enrolled front, walking side-on) it's near chance.
+Hence: enroll and identify walking toward the camera.
 
-Caveat worth remembering: the 0.7737 threshold was calibrated for 1:1
-verification via 13-fold LOOCV. Open-set identification against a growing
-gallery changes the false-accept calculus (more candidates = more chances
-for a false positive above threshold). Re-derive this threshold once real
-enrollment data exists instead of trusting it indefinitely.
+**Centering.** Raw GaitGraph2 embeddings from any one camera share a large
+common component - every pair scores ~0.99 and a threshold would have to be
+0.998. `GaitModel.similarity` subtracts the mean embedding of the 66
+research videos (`models/checkpoint/gaitgraph2_center.npy`) before cosine,
+which spreads scores to a usable range. A mean over many *different people*
+filmed by the deployment camera itself would do better (front-view stranger
+EER 11.6% in simulation), but that needs strangers' walks we don't have;
+centering on the enrolled people's own signatures was tested and made
+things worse.
 
-## 5. Normalization: deliberately none
+**Threshold.** 0.75 is the front-view EER point above. A new camera shifts
+it; watch the scores `identify.py` prints and adjust
+`identification.similarity_threshold`.
 
-`train.py` computes and saves `feature_stats` (per-dimension mean/std) into
-checkpoints when available, and the reference `inference.py` z-score
-normalizes with them. **This specific checkpoint has no `feature_stats`** -
-confirmed by loading it directly, not assumed. `inference.py` itself
-handles that by skipping normalization and printing a warning. That means
-the only code path this checkpoint's headline numbers (96.11% AUC on this
-variant, 90.32% accuracy) were produced through runs on **raw, unnormalized
-features**.
+### Why the previous model was replaced
 
-An earlier plan in this project (`docs/phase-reports/PHASE_1_UPDATE.md`)
-proposed computing feature statistics from enrollment data and normalizing
-before inference. That was never implemented or tested against this
-checkpoint's actual behavior, and doing so now would silently shift the
-input distribution away from what the model was evaluated on. `config.yaml`
-sets `model.normalize_features: false`, and `GaitModel` raises rather than
-silently normalizing if that's ever flipped without a matching
-`feature_stats` mechanism being built first.
+The earlier checkpoint (`full_hybrid_best.pth` from the research repo's
+ablation study) was a difference-based verification head over 78-dim
+hand-engineered features. It could not identify anyone:
 
-## 6. Events / RPA boundary
+1. The research enrollment averaged **every** video of a person - including
+   the video being tested - into their signature. Training and evaluation
+   pairs overlapped, so the model learned to detect that overlap. With the
+   tested video included: 64/66 correct. Held out: **7/66, chance level.**
+   Its reported 96% AUC measured overlap, not gait.
+2. Its z-score stats were never saved; this repo fed raw features, which
+   saturated the head to exactly 1.0 for every pair.
+3. Retraining it leak-free on the 13 research subjects (embedding + triplet
+   or cosine-softmax loss, leave-one-subject-out) reached 6/66 - 13 people
+   are too few to learn a gait embedding that generalizes to new people.
+
+This affects the sibling research project's reported numbers too, since its
+evaluation uses the same enrollment averages.
+
+## 5. Events / RPA boundary
 
 `src/events/identity_event.py` builds a plain `IdentityEvent` (person,
 similarity, threshold, timestamp, device_id) from an `IdentificationResult`
@@ -122,13 +124,18 @@ module imports torch/mediapipe - an actual RPA platform (UiPath, Power
 Automate, a webhook receiver, whatever gets chosen later) consumes these
 events without touching the ML pipeline.
 
-## 7. Known limitations, stated plainly
+## 6. Known limitations, stated plainly
 
-- 13-subject training set; LOOCV was used to be honest about generalization,
-  but the model has still only ever seen 13 people's gait.
-- The identification threshold is a verification-task threshold reused for
-  identification (see #4's caveat).
+- Roughly 1 in 4 strangers is accepted at the default threshold (front
+  view, research videos). Raising the threshold trades that for more
+  enrolled people coming up UNKNOWN.
+- View-dependent: works walking toward the camera, weak side-on, near
+  chance across views.
+- Validated on 13 people filmed on phones; the live webcam is a different
+  camera. Expect to re-tune the threshold.
+- Changing the model or its input mapping invalidates enrolled signatures:
+  delete `database/gait.db` and re-enroll.
 - No spoof/liveness detection - this is a biometric identification system,
   not a security-hardened access-control system. Don't market it as one.
-- Feature engineering runs on CPU (MediaPipe); it's the pipeline's latency
-  bottleneck, more so than the ~850K-parameter model.
+- MediaPipe pose extraction (CPU) is the latency bottleneck; the gait model
+  runs once per captured walk.

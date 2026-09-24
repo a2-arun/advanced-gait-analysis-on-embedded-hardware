@@ -287,36 +287,6 @@ class GaitFeatureExtractor:
         
         return features
     
-    def sequence_to_model_input(self, pose_sequence: np.ndarray) -> np.ndarray:
-        """
-        Convert a raw pose sequence into the exact 78-dim/frame model input
-        the trained checkpoint expects.
-
-        This is the single source of truth for the coords/angles/velocities
-        concatenation order (36 + 6 + 36 = 78) - it must match
-        Deepfake-Detection/scripts/inference/inference.py's
-        extract_video_features() exactly, since that's the code path the
-        checkpoint was validated against. Any live-camera or enrollment
-        feature vector must go through this method.
-
-        Args:
-            pose_sequence: (T, 33, 3) raw landmark sequence, any T
-
-        Returns:
-            (sequence_length, 78) float32 array, ready for GaitDeepfakeDetector
-        """
-        normalized_sequence = self._normalize_sequence_length(pose_sequence)
-        gait_features = self.compute_gait_features(normalized_sequence)
-
-        coords = gait_features['normalized_coords']          # (T, 12, 3)
-        coords_flat = coords.reshape(coords.shape[0], -1)     # (T, 36)
-        angles = gait_features['joint_angles']                 # (T, 6)
-        velocities = gait_features['velocities']               # (T, 12, 3)
-        velocities_flat = velocities.reshape(velocities.shape[0], -1)  # (T, 36)
-
-        features = np.concatenate([coords_flat, angles, velocities_flat], axis=1)
-        return features.astype(np.float32)  # (T, 78)
-
     def process_video(self, video_path: str,
                       use_all_landmarks: bool = True) -> Optional[Dict]:
         """

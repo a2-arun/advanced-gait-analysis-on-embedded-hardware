@@ -34,17 +34,14 @@ CREATE TABLE IF NOT EXISTS enrolled_identities (
 -- ============================================================================
 -- Gait Embeddings Table
 -- ============================================================================
--- Stores each enrolled person's reference gait signature: a RAW
--- (sequence_length, 78) feature sequence (float32, row-major bytes), NOT a
--- compact embedding. The trained model's only validated matching mechanism
--- (the difference-based verification head, see docs/ARCHITECTURE.md #4)
--- compares raw feature sequences directly - there is no cosine-similarity
--- embedding path for this checkpoint. Shape is fixed by config.yaml's
--- model.sequence_length / model.input_dim at read time.
+-- Stores each enrolled person's reference gait signature: the mean
+-- GaitGraph2 embedding of their enrollment walks, a 1-D float32 vector
+-- (384 values). Signatures from a different model aren't comparable -
+-- re-enroll after changing the model (see docs/ARCHITECTURE.md #4).
 CREATE TABLE IF NOT EXISTS gait_embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     enrolled_id INTEGER NOT NULL,
-    embedding_vector BLOB NOT NULL,  -- Serialized (sequence_length, 78) float32 array
+    embedding_vector BLOB NOT NULL,  -- Serialized 1-D float32 embedding
     embedding_source TEXT,            -- 'enrollment', 'averaging', 'online'
     quality_score REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -124,8 +121,8 @@ CREATE INDEX IF NOT EXISTS idx_events_person_id
 -- ============================================================================
 INSERT OR IGNORE INTO system_metadata (key, value, description) VALUES
     ('db_version', '1.0', 'Database schema version'),
-    ('model_version', 'full_hybrid_best', 'Checkpoint variant in use'),
-    ('similarity_threshold', '0.7737', 'Operating threshold (Youdens J, from LOOCV verification, see docs/ARCHITECTURE.md)'),
+    ('model_version', 'gaitgraph2_oumvlp', 'Gait model in use'),
+    ('similarity_threshold', '0.75', 'Centered-cosine threshold (config.yaml is authoritative, see docs/ARCHITECTURE.md)'),
     ('created_at', CURRENT_TIMESTAMP, 'Database creation timestamp');
 """
 

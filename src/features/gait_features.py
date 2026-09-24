@@ -1,15 +1,15 @@
-"""Rolls live camera frames into model-ready 78-dim gait sequences.
+"""Rolls live camera frames into captured walks for the gait model.
 
-The offline video pipeline (src/pose/pose_extraction.py:process_video) reads
-a whole file and normalizes once. A live camera has no "end of file" - this
-module is the streaming equivalent: accumulate per-frame landmarks and, once
-there's enough motion, hand back a (sequence_length, 78) array through the
-same GaitFeatureExtractor.sequence_to_model_input() used offline, so the
-model always sees the same feature distribution regardless of source.
+A live camera has no "end of file" - this module accumulates per-frame
+MediaPipe landmarks, with the time each frame was seen, until there's enough
+walking to embed. Timestamps matter: the camera's effective frame rate drifts
+with load, and GaitModel resamples every walk to the 25 fps the model was
+trained at.
 """
 
-from dataclasses import dataclass, field
-from typing import List, Optional
+import time
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -18,40 +18,31 @@ from src.pose.pose_extraction import GaitFeatureExtractor
 
 @dataclass
 class CapturedSequence:
-    model_input: np.ndarray       # (sequence_length, 78)
-    raw_pose_sequence: np.ndarray  # (T, 33, 3) before resampling
-    pose_quality: float           # fraction of frames with a detected pose
+    poses: np.ndarray          # (T, 33, 3) MediaPipe normalized landmarks, valid frames only
+    timestamps: np.ndarray     # (T,) seconds, when each of those frames was captured
+    frame_size: Tuple[int, int]  # (width, height) in pixels
+    pose_quality: float        # fraction of frames with a detected pose
 
 
 class LiveSequenceBuffer:
     """Accumulates pose landmarks from consecutive frames and yields a
-    complete gait sequence once enough valid frames have been captured.
+    captured walk once enough valid frames have been seen.
 
     Not thread-safe; intended to be driven from a single capture loop.
     """
 
-    def __init__(
-        self,
-        extractor: GaitFeatureExtractor,
-        sequence_length: int = 60,
-        min_valid_frames: int = 20,
-        max_buffer_frames: int = 120,
-    ):
+    def __init__(self, extractor: GaitFeatureExtractor, min_valid_frames: int = 60):
         self.extractor = extractor
-        self.sequence_length = sequence_length
-        self.min_valid_frames = min_valid_frames
-        self.max_buffer_frames = max_buffer_frames
+        self.frames_needed = min_valid_frames
 
         self._landmarks: List[np.ndarray] = []
+        self._timestamps: List[float] = []
         self._total_frames_seen = 0
         self.last_landmarks: Optional[np.ndarray] = None
 
-    @property
-    def frames_needed(self) -> int:
-        return max(self.min_valid_frames, self.sequence_length // 2)
-
     def reset(self) -> None:
         self._landmarks = []
+        self._timestamps = []
         self._total_frames_seen = 0
 
     @property
@@ -60,42 +51,23 @@ class LiveSequenceBuffer:
 
     def add_frame(self, frame: np.ndarray) -> Optional[CapturedSequence]:
         """Feed one BGR camera frame. Returns a CapturedSequence once the
-        buffer has enough frames to build a full gait sequence, else None.
-        """
+        buffer has enough frames, else None."""
         self._total_frames_seen += 1
         landmarks = self.extractor.extract_pose_from_frame(frame)
         self.last_landmarks = landmarks
 
         if landmarks is not None:
             self._landmarks.append(landmarks)
+            self._timestamps.append(time.monotonic())
 
-        ready = (
-            len(self._landmarks) >= self.frames_needed
-            or len(self._landmarks) >= self.max_buffer_frames
-        )
-
-        if not ready:
+        if len(self._landmarks) < self.frames_needed:
             return None
 
-        return self._flush()
-
-    def _flush(self) -> CapturedSequence:
-        raw_sequence = np.array(self._landmarks)
-        pose_quality = len(self._landmarks) / max(self._total_frames_seen, 1)
-        model_input = self.extractor.sequence_to_model_input(raw_sequence)
-
         result = CapturedSequence(
-            model_input=model_input,
-            raw_pose_sequence=raw_sequence,
-            pose_quality=pose_quality,
+            poses=np.array(self._landmarks, dtype=np.float32),
+            timestamps=np.array(self._timestamps),
+            frame_size=(frame.shape[1], frame.shape[0]),
+            pose_quality=len(self._landmarks) / max(self._total_frames_seen, 1),
         )
         self.reset()
         return result
-
-
-def average_sequences(sequences: List[np.ndarray]) -> np.ndarray:
-    """Average multiple (sequence_length, 78) captures into one signature,
-    e.g. for enrollment from several walk passes."""
-    if not sequences:
-        raise ValueError("Cannot average an empty list of sequences")
-    return np.mean(np.stack(sequences, axis=0), axis=0).astype(np.float32)

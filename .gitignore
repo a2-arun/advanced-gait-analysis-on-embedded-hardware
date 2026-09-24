@@ -8,11 +8,9 @@ env/
 *.egg-info/
 _scan_result.txt
 
-# Model weights - large binaries. full_hybrid_best.pth (3.5MB) is small enough
-# to vendor directly so collaborators don't need the sibling research repo;
-# other checkpoint/export formats stay ignored unless deliberately added.
+# Model weights - not committed. The GaitGraph2 weights carry no license, so
+# each machine converts its own copy (docs/SETUP.md). The center .npy is ours.
 models/checkpoint/*.pth
-!models/checkpoint/full_hybrid_best.pth
 models/checkpoint/*.onnx
 models/checkpoint/*.engine
 models/pose_model/*.task
@@ -21,6 +19,8 @@ models/pose_model/*.task
 database/*.db
 outputs/logs/*.log
 outputs/events/*.json
+# Pose landmarks of the 13 research subjects (biometric data) - never commit
+outputs/research_poses.pkl
 
 # OS / editor
 .DS_Store

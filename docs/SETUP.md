@@ -19,28 +19,33 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 2. Get the model checkpoint
+## 2. Get the model weights
 
-`models/checkpoint/full_hybrid_best.pth` is committed directly in this repo
-(it's only 3.5MB) so you don't need access to the sibling research
-repository. If it's missing for some reason, and you do have that repo,
-copy it from there instead:
+The model is GaitGraph2 (ResGCN-N51-R4) pretrained on OUMVLP-Pose. Its
+weights are published without a license, so they're not committed here -
+each machine fetches and converts its own copy:
 
-```bash
-cp "../Deepfake-Updated/DeepFake-Detection/outputs/ablation/full_hybrid_best.pth" \
-   models/checkpoint/full_hybrid_best.pth
-```
-
-Verify it loads with the architecture this project expects:
+1. Download `model_weights.zip` (~42 MB) from
+   https://github.com/tteepe/GaitGraph2/releases/tag/v0.1
+2. Convert it (a zip or an already-extracted folder both work):
 
 ```bash
-python tests/test_model_loading.py
+python scripts/convert_gaitgraph2.py path/to/model_weights.zip
 ```
 
-If this fails with a shape mismatch, check `config.yaml`'s `model:` section
-against `docs/ARCHITECTURE.md` #1 - the checkpoint needs the *exact*
-hyperparameters it was trained with, not `models/full_pipeline.py`'s
-`create_model()` defaults.
+This writes `models/checkpoint/gaitgraph2_oumvlp.pth`. The centering vector
+`models/checkpoint/gaitgraph2_center.npy` is committed. Verify:
+
+```bash
+python tests/test_gait_model.py
+```
+
+Optional, if you have the sibling `deepfake-detection` repo: re-check
+accuracy on its 13-subject videos (first run extracts poses, ~12 min):
+
+```bash
+python scripts/eval_research_videos.py
+```
 
 ## 3. Initialize the database
 

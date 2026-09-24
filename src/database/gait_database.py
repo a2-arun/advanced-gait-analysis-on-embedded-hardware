@@ -2,9 +2,7 @@
 
 Wraps database/database_schema.py's raw SQLite schema with the operations
 the enrollment and identification pipelines actually need. Gait signatures
-are stored and returned as raw (sequence_length, 78) float32 arrays - see
-the schema's comment on gait_embeddings for why that's not a compact
-embedding.
+are stored and returned as 1-D float32 embedding vectors (GaitModel.embed).
 """
 
 import json
@@ -24,10 +22,10 @@ def _serialize(array: np.ndarray) -> bytes:
     return np.asarray(array, dtype=np.float32).tobytes()
 
 
-def _deserialize(blob: bytes, sequence_length: int, input_dim: int) -> np.ndarray:
+def _deserialize(blob: bytes) -> np.ndarray:
     # np.frombuffer's array is a read-only view over `blob` - copy it so
-    # downstream code (e.g. torch.from_numpy) can treat it as an owned array.
-    return np.frombuffer(blob, dtype=np.float32).reshape(sequence_length, input_dim).copy()
+    # downstream code can treat it as an owned array.
+    return np.frombuffer(blob, dtype=np.float32).copy()
 
 
 class GaitDatabase:
@@ -35,9 +33,6 @@ class GaitDatabase:
         self.config = config or load_config()
         db_path = resolve_path(self.config["database"]["path"])
         db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self._sequence_length = self.config["model"]["sequence_length"]
-        self._input_dim = self.config["model"]["input_dim"]
 
         if self.config["database"].get("auto_init", True) or not db_path.exists():
             init_database(str(db_path)).close()
@@ -129,9 +124,7 @@ class GaitDatabase:
         ).fetchall()
 
         return {
-            row["person_name"]: _deserialize(
-                row["embedding_vector"], self._sequence_length, self._input_dim
-            )
+            row["person_name"]: _deserialize(row["embedding_vector"])
             for row in rows
         }
 

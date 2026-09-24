@@ -5,49 +5,28 @@
 # Model
 # ==============================================================================
 model:
-  checkpoint_path: "models/checkpoint/full_hybrid_best.pth"
-
-  # Architecture params - MUST match the checkpoint exactly (verified against
-  # its state_dict in tests/test_model_loading.py). This is the "Full Hybrid"
-  # variant from the ablation study, NOT the create_model() defaults in
-  # models/full_pipeline.py (those are larger and will fail to load this
-  # checkpoint with a shape mismatch).
-  input_dim: 78                     # 36 coords + 6 angles + 36 velocities
-  encoder_hidden_dims: [64, 128]
-  encoder_output_dim: 128
-  lstm_hidden: 64
-  lstm_layers: 1
-  transformer_d_model: 128
-  transformer_heads: 4
-  transformer_layers: 2
-  embedding_dim: 128
-  verification_hidden: 64
-  dropout: 0.3
-
-  sequence_length: 60                # frames per gait sequence
+  # GaitGraph2 (ResGCN-N51-R4) pretrained on OUMVLP-Pose, used as-is. Not in
+  # git - the weights have no license. Create with:
+  #   python scripts/convert_gaitgraph2.py path/to/model_weights.zip
+  checkpoint_path: "models/checkpoint/gaitgraph2_oumvlp.pth"
+  # Mean embedding of the 13-subject research videos, subtracted before
+  # cosine (docs/ARCHITECTURE.md #4). Regenerate with
+  # scripts/eval_research_videos.py --write-center.
+  center_path: "models/checkpoint/gaitgraph2_center.npy"
   device: "auto"                     # "cuda", "cpu", or "auto"
-
-  # The checkpoint has no saved feature_stats, so the reference inference
-  # pipeline it was validated against runs on RAW (non z-score-normalized)
-  # features. Do not normalize unless a future retrain saves feature_stats -
-  # normalizing an unnormalized-trained model changes its input distribution
-  # and was never evaluated.
-  normalize_features: false
 
 # ==============================================================================
 # Identification
 # ==============================================================================
-# The model's only validated matching mechanism is the difference-based
-# verification head (see docs/ARCHITECTURE.md #4): it compares a query's raw
-# 78-dim feature sequence against ONE enrolled identity's raw feature sequence
-# and outputs P(same person). Live identification = run this against every
-# enrolled identity and take the best match above threshold.
+# Each walk becomes one embedding; it's compared (centered cosine) against
+# every enrolled person's signature and the best match above threshold wins.
 identification:
-  # Youden's J optimal operating point from LOOCV on the research dataset.
-  # This was calibrated for 1:1 verification, not N-way open-set
-  # identification - false-accept behavior may shift as the gallery grows.
-  # Re-check this once you have real enrollment data.
-  similarity_threshold: 0.7737
+  # Centered-cosine cutoff: the stranger-vs-enrolled EER point for front-view
+  # walks (toward the camera) with 2 people enrolled, from
+  # scripts/eval_research_videos.py. A new camera shifts it - watch the scores
+  # identify.py prints: raise it if strangers get accepted, lower it if
+  # enrolled people come up UNKNOWN.
+  similarity_threshold: 0.75
 
   top_k_candidates: 3               # how many candidates to report for diagnostics
 
@@ -82,8 +61,10 @@ pose:
 # Sequence assembly
 # ==============================================================================
 sequence:
-  length: 60                         # frames a sequence is resampled to before inference
-  min_valid_frames: 20               # don't attempt a sequence with fewer real pose detections
+  # Real pose frames collected per captured walk (about 2-3 s). The model
+  # needs at least 1.2 s after resampling to 25 fps; more walking = more
+  # 30-frame windows averaged into one embedding.
+  min_valid_frames: 60
 
 # ==============================================================================
 # Enrollment

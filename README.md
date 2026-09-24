@@ -6,36 +6,30 @@ feed, running on a laptop or on an NVIDIA Jetson Nano.
 - **Jetson Nano (JetPack 4.6, Python 3.6):** jump to [Jetson Nano setup](#jetson-nano-setup-jetpack-46--python-36)
 - **Laptop (Windows/Linux/macOS, Python 3.8+):** jump to [Laptop quick start](#laptop-quick-start)
 
-## Relationship to the research project
+## The gait model
 
-This project reuses the gait representation and trained model from a
-separate research project, **Deepfake Detection Using Gait Analysis**
-(sibling repo), which asks *"does this video's walk match the identity it
-claims?"* to catch face-swapped video. A live camera feed can't be a
-deepfake - there's no video file to have swapped a face onto - so that
-framing doesn't apply here. What this project keeps is the underlying
-question the model was actually trained to answer (*"does this gait match
-that enrolled signature?"*) and repurposes it for open-set identification:
-compare a live gait sequence against everyone enrolled and report the best
-match, or "unknown" if nobody clears the threshold.
+Identification uses **GaitGraph2** (ResGCN-N51-R4, [tteepe/GaitGraph2](https://github.com/tteepe/GaitGraph2)),
+pretrained on OUMVLP-Pose (~10,000 people) and used as-is - nothing is
+trained on our data. Each walk becomes a 384-d embedding; people are matched
+by cosine similarity.
 
-**Read `docs/ARCHITECTURE.md` before touching the model/matching code** -
-several assumptions in earlier planning turned out to be wrong once the
-checkpoint and research code were actually inspected (wrong embedding
-dimension, an unvalidated normalization plan, and an incorrect assumption
-that matching works via cosine similarity on embeddings). That document
-records what's actually true and why.
+An earlier version reused the checkpoint from the sibling research project
+(**Deepfake Detection Using Gait Analysis**). It turned out not to recognize
+people at all: the research enrollment averaged every video of a person,
+including the one being tested, so its accuracy measured overlap, not gait.
+With the tested video held out it was at chance. **Read
+`docs/ARCHITECTURE.md` before touching the model/matching code** - it has
+the full story and the numbers.
 
 ## Pipeline
 
 ```
 Camera (USB webcam or MIPI CSI)
-  -> Pose extraction (MediaPipe, 12 gait-relevant landmarks)
-  -> 78-dim/frame gait features (coordinates + angles + velocities)
-  -> 60-frame sequence buffer
-  -> Trained CNN+BiLSTM+Transformer verification head, run against
-     every enrolled identity
-  -> IDENTIFIED: <name> (similarity: 0.94)   or   UNKNOWN PERSON
+  -> Pose extraction (MediaPipe, 33 landmarks, timestamped)
+  -> ~2-3 s walk buffer, resampled to 25 fps
+  -> 30-frame windows as OpenPose-18 skeletons -> GaitGraph2 -> embedding
+  -> Centered cosine vs every enrolled signature
+  -> IDENTIFIED: <name> (similarity: 0.91)   or   UNKNOWN PERSON
   -> Identity event (JSON, for downstream automation/RPA)
 ```
 
@@ -47,14 +41,14 @@ requirements.txt          # laptop dependencies (Python 3.8+)
 requirements-jetson.txt   # Jetson Nano dependencies (Python 3.6) - torch/mediapipe come from wheels, see below
 init_db.py                # one-time SQLite schema setup
 
-models/                   # model architecture + checkpoint (full_hybrid_best.pth is committed)
+models/checkpoint/        # GaitGraph2 weights (converted locally, not in git) + centering vector
 database/                 # SQLite schema definition
 
 src/
   camera/                 # camera capture (USB index or GStreamer/CSI pipeline)
-  pose/                   # MediaPipe extraction + the 78-dim feature builder (shared by offline/live)
-  features/               # live camera -> gait-sequence buffering
-  model/                  # checkpoint loading + 1:N identification
+  pose/                   # MediaPipe extraction (shared by offline/live)
+  features/               # live camera -> timestamped walk buffering
+  model/                  # GaitGraph2 embedding + 1:N identification (resgcn/ = vendored MIT code)
   database/               # enrolled-identity gallery + event log CRUD
   enrollment/             # "walk in front of the camera a few times" flow
   identification/         # ties camera+model+database+events into the live loop
@@ -65,6 +59,8 @@ scripts/
   test_camera.py          # verify the camera works before anything else (--no-display for SSH)
   enroll.py               # enroll a new identity
   identify.py             # run live identification
+  convert_gaitgraph2.py   # one-time: GaitGraph2 release zip -> models/checkpoint/
+  eval_research_videos.py # accuracy check on the 13-subject research videos
 
 docs/
   ARCHITECTURE.md          # what's actually true about the model/pipeline, and why
@@ -73,7 +69,7 @@ docs/
   phase-reports/            # historical planning docs, superseded by ARCHITECTURE.md
 
 tests/
-  test_model_loading.py     # checkpoint/architecture sanity checks
+  test_gait_model.py        # GaitModel sanity checks (synthetic walks, no camera)
   investigate_checkpoint.py, check_metrics.py   # one-off diagnostic scripts
 ```
 
@@ -157,7 +153,7 @@ python3 -c "import cv2; print([l for l in cv2.getBuildInformation().splitlines()
 cd ~
 git clone https://github.com/a2-arun/advanced-gait-analysis-on-embedded-hardware.git
 cd advanced-gait-analysis-on-embedded-hardware
-ls models/checkpoint/full_hybrid_best.pth      # the model is committed - no extra download
+# The GaitGraph2 weights are not in git - see "Model weights" in docs/SETUP.md
 ```
 
 ### 5. Virtual environment (with system site-packages)
@@ -225,15 +221,19 @@ python3 -c "import mediapipe as mp; print(mp.__version__, mp.solutions.pose.Pose
 If it says `No module named 'X'`, `pip install X` and retry (the wheel was
 installed without dependency resolution).
 
-### 9. Verify the model loads and runs (uses the GPU automatically)
+### 9. Get the model weights, verify they run (uses the GPU automatically)
+
+The GaitGraph2 weights aren't in git. Download `model_weights.zip` from
+https://github.com/tteepe/GaitGraph2/releases/tag/v0.1 (on the Nano or copy
+it over with `scp`), then:
 
 ```bash
+python3 scripts/convert_gaitgraph2.py ~/model_weights.zip
 python3 init_db.py
-python3 tests/test_model_loading.py
+python3 tests/test_gait_model.py
 ```
 
-Expected: every test prints `[OK] PASS`, and Test 5 reports
-`CUDA available: NVIDIA Tegra X1`.
+Expected: `[OK] all GaitModel checks passed`.
 
 ### 10. Verify the camera
 
@@ -258,10 +258,12 @@ python3 scripts/test_camera.py --no-display     # over SSH / no monitor: grabs 1
 ### 11. Enroll people, then identify
 
 Stand 2-3 m from the camera so your **whole body** (head to feet) is in
-frame, in decent light, and walk **across** the view.
+frame, in decent light, and walk **toward** the camera. Front-view walks
+are far more reliable than side-on ones (see `docs/ARCHITECTURE.md` #4),
+and identification only works in the same direction you enrolled.
 
 ```bash
-python3 scripts/enroll.py --name "Alice"        # walk across 3-5 times when prompted
+python3 scripts/enroll.py --name "Alice"        # walk toward the camera 3-5 times when prompted
 python3 scripts/enroll.py --name "Bob"          # enroll at least one more person to test UNKNOWN/match
 python3 scripts/identify.py --device-id jetson-nano-01
 ```
@@ -344,8 +346,9 @@ with the board powered off, and re-run the `gst-launch-1.0` check.
 **MediaPipe wheel download fails or `mp.solutions.pose` is missing.** The
 PINTO0309 download script pulls from an external host and can rot. Fallback
 is building MediaPipe from source on the Nano (many hours), or replacing
-pose estimation with `trt_pose` (different landmarks - would need the 78-dim
-feature builder adapted and the model re-validated). See `docs/DEPLOYMENT.md`.
+pose estimation with `trt_pose` (different landmarks - would need the
+OpenPose-18 mapping in `src/model/gait_model.py` adapted and the model
+re-validated). See `docs/DEPLOYMENT.md`.
 
 **`enroll.py`/`identify.py` crash with `HTTPError: HTTP Error 404: Not
 Found`, "Downloading model to .../mediapipe/modules/pose_landmark/
@@ -371,10 +374,12 @@ See `docs/SETUP.md` for the full walkthrough. Short version:
 python -m venv .venv && .venv\Scripts\activate   # or source .venv/bin/activate
 pip install -r requirements.txt
 
-# models/checkpoint/full_hybrid_best.pth is already committed in this repo
+# Model weights (not in git): download model_weights.zip from
+# https://github.com/tteepe/GaitGraph2/releases/tag/v0.1, then
+python scripts/convert_gaitgraph2.py path/to/model_weights.zip
 
 python init_db.py
-python tests/test_model_loading.py
+python tests/test_gait_model.py
 python scripts/test_camera.py
 
 python scripts/enroll.py --name "Alice"
@@ -392,11 +397,14 @@ either platform.
 
 ## Known limitations
 
-- The model was trained on 13 subjects; treat identification accuracy
-  claims accordingly (see `docs/ARCHITECTURE.md` #7 for the full list).
-- The similarity threshold (0.7737) was calibrated for 1:1 verification,
-  not open-set identification against a growing gallery - revisit once
-  there's real enrollment data.
+- Accuracy on the 13-subject research videos, front-view walks, 2 people
+  enrolled: the two are told apart ~94% of the time, and at the default
+  threshold roughly 1 in 4 strangers is still accepted (EER ~24%). Side-view
+  walks are much weaker. See `docs/ARCHITECTURE.md` #4.
+- The threshold (0.75) comes from those videos; a new camera shifts it.
+  Tune it on your own walks.
+- Changing the model invalidates enrolled signatures - delete
+  `database/gait.db` and re-enroll.
 - On the Jetson the pose backend is MediaPipe 0.8.5's legacy `Pose` in
   tracking mode with the lite model, not the 0.10 Tasks `PoseLandmarker`
   the laptop uses. Landmarks are the same 33-point layout, but small numeric
@@ -404,5 +412,5 @@ either platform.
   match on the other - enroll and identify on the same device.
 - No liveness/spoof detection. This is a biometric identification system,
   not an access-control security system.
-- MediaPipe pose extraction (CPU) is the pipeline's latency bottleneck, not
-  the ~850K-parameter model.
+- MediaPipe pose extraction (CPU) is the pipeline's latency bottleneck; the
+  gait model runs once per 2-3 s walk.
