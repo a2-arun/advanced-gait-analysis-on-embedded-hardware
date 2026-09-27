@@ -1,11 +1,11 @@
 # Jetson Nano Deployment
 
 **Status: install path written, not yet run on the device.** The step-by-step
-install is in the "Jetson Nano" section of the top-level `README.md`
+install is in `docs/JETSON.md`
 (uses `requirements-jetson.txt`). This document keeps the background: what
 was risky and why the choices there were made. The risk list below is the
-original pre-hardware analysis; where README.md and this file disagree,
-README.md is current.
+original pre-hardware analysis; where docs/JETSON.md and this file
+disagree, docs/JETSON.md is current.
 
 ## What "Jetson Nano" means here
 

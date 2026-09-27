@@ -52,9 +52,11 @@ class LiveSequenceBuffer:
     def add_frame(self, frame: np.ndarray) -> Optional[CapturedSequence]:
         """Feed one BGR camera frame. Returns a CapturedSequence once the
         buffer has enough frames, else None."""
-        self._total_frames_seen += 1
         landmarks = self.extractor.extract_pose_from_frame(frame)
         self.last_landmarks = landmarks
+        if landmarks is None and not self._landmarks:
+            return None  # nobody in view yet - don't count it against pose quality
+        self._total_frames_seen += 1
 
         if landmarks is not None:
             self._landmarks.append(landmarks)

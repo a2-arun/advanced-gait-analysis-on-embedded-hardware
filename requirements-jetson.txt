@@ -1,5 +1,5 @@
 # Jetson Nano (JetPack 4.6.x, Ubuntu 18.04, Python 3.6, aarch64).
-# Install order matters - follow the "Jetson Nano" section of README.md:
+# Install order matters - follow docs/JETSON.md:
 #   1) torch 1.10.0     -> NVIDIA's wheel (NOT on PyPI for this platform)
 #   2) mediapipe 0.8.5  -> PINTO0309's wheel (NOT on PyPI for Python 3.6)
 #   3) this file

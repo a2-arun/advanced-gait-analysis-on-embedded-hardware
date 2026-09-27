@@ -1,7 +1,7 @@
 # Laptop development environment (Windows/Linux/macOS).
 # Do NOT use this file on a Jetson Nano (Python 3.6): torch>=2.1 and
 # mediapipe>=0.10 do not exist for that platform, so pip reports "no matching
-# distribution". Use requirements-jetson.txt and the Jetson section of README.md.
+# distribution". Use requirements-jetson.txt and docs/JETSON.md.
 
 torch>=2.1
 numpy>=1.24
