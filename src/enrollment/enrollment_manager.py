@@ -5,6 +5,7 @@ capture N gait sequences, average them into one signature, store it.
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+import cv2
 import numpy as np
 
 from src.camera.camera_manager import CameraManager
@@ -13,8 +14,11 @@ from src.features.gait_features import CapturedSequence, LiveSequenceBuffer, ave
 from src.pose.pose_extraction import GaitFeatureExtractor
 from src.utils.config import load_config
 from src.utils.logger import get_logger
+from src.utils.preview import GREEN, ORANGE, draw_preview
 
 logger = get_logger(__name__)
+
+PREVIEW_WINDOW = "Enrollment - press q to cancel"
 
 
 @dataclass
@@ -29,12 +33,15 @@ def enroll_from_camera(
     person_name: str,
     config: Optional[dict] = None,
     on_sequence_captured: Optional[Callable[[int, CapturedSequence], None]] = None,
+    show_preview: bool = False,
 ) -> EnrollmentOutcome:
     """Capture config['enrollment']['min_sequences']..max_sequences walk
     passes from the live camera and enroll the averaged signature.
 
     on_sequence_captured(index, sequence) fires after each captured pass,
     e.g. so a CLI can print progress or a UI can show a checkmark.
+    show_preview opens an OpenCV window with the skeleton and progress;
+    pressing q there cancels enrollment.
     """
     config = config or load_config()
     enrollment_cfg = config["enrollment"]
@@ -47,6 +54,8 @@ def enroll_from_camera(
     )
 
     captured: List[CapturedSequence] = []
+    cancelled = False
+    flash_text, flash_color, flash_frames_left = "", GREEN, 0
 
     try:
         with CameraManager(config) as camera:
@@ -58,25 +67,46 @@ def enroll_from_camera(
 
             for frame in camera.frames():
                 result = buffer.add_frame(frame)
-                if result is None:
-                    continue
 
-                if result.pose_quality < enrollment_cfg["quality_threshold"]:
-                    logger.warning(
-                        "Discarding low-quality pass (%.0f%% valid frames < %.0f%% required)",
-                        result.pose_quality * 100,
-                        enrollment_cfg["quality_threshold"] * 100,
+                if result is not None:
+                    if result.pose_quality < enrollment_cfg["quality_threshold"]:
+                        logger.warning(
+                            "Discarding low-quality pass (%.0f%% valid frames < %.0f%% required)",
+                            result.pose_quality * 100,
+                            enrollment_cfg["quality_threshold"] * 100,
+                        )
+                        flash_text = "Pass rejected ({:.0%}) - walk again".format(result.pose_quality)
+                        flash_color = ORANGE
+                    else:
+                        captured.append(result)
+                        if on_sequence_captured:
+                            on_sequence_captured(len(captured), result)
+                        flash_text = "Pass {} captured ({:.0%})".format(len(captured), result.pose_quality)
+                        flash_color = GREEN
+                    flash_frames_left = 45
+
+                if show_preview:
+                    needed = buffer.frames_needed
+                    draw_preview(
+                        frame, buffer.last_landmarks, PREVIEW_WINDOW,
+                        ["Pass {}/{}".format(len(captured), enrollment_cfg["max_sequences"]),
+                         "Frames {}/{}".format(min(buffer.valid_frame_count, needed), needed)],
+                        flash_text if flash_frames_left > 0 else "", flash_color,
                     )
-                    continue
-
-                captured.append(result)
-                if on_sequence_captured:
-                    on_sequence_captured(len(captured), result)
+                    flash_frames_left -= 1
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        cancelled = True
+                        break
 
                 if len(captured) >= enrollment_cfg["max_sequences"]:
                     break
     finally:
         extractor.close()
+        if show_preview:
+            cv2.destroyAllWindows()
+
+    if cancelled:
+        raise RuntimeError("Cancelled from the preview window - nothing was saved.")
 
     if len(captured) < enrollment_cfg["min_sequences"]:
         raise RuntimeError(

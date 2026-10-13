@@ -194,8 +194,8 @@ pip install torch-1.10.0-cp36-cp36m-linux_aarch64.whl
 Check (the second line must print `True`):
 
 ```bash
-python -c "import torch; print(torch.__version__)"                 # 1.10.0
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python3 -c "import torch; print(torch.__version__)"                 # 1.10.0
+python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
 Do **not** `pip install torch` from PyPI on the Nano - those wheels have no
@@ -219,7 +219,7 @@ pip install --no-deps "$(find ~/mediapipe-bin -name 'mediapipe-0.8.5_cuda102-cp3
 Check that pose is present:
 
 ```bash
-python -c "import mediapipe as mp; print(mp.__version__, mp.solutions.pose.Pose)"
+python3 -c "import mediapipe as mp; print(mp.__version__, mp.solutions.pose.Pose)"
 ```
 
 If it says `No module named 'X'`, `pip install X` and retry (the wheel was
@@ -228,8 +228,8 @@ installed without dependency resolution).
 ### 9. Verify the model loads and runs (uses the GPU automatically)
 
 ```bash
-python init_db.py
-python tests/test_model_loading.py
+python3 init_db.py
+python3 tests/test_model_loading.py
 ```
 
 Expected: every test prints `[OK] PASS`, and Test 5 reports
@@ -251,8 +251,8 @@ gst-launch-1.0 nvarguscamerasrc num-buffers=60 ! 'video/x-raw(memory:NVMM),width
 Then test through the project:
 
 ```bash
-python scripts/test_camera.py                  # with a monitor on HDMI: live preview, press q
-python scripts/test_camera.py --no-display     # over SSH / no monitor: grabs 100 frames, saves outputs/camera_test.jpg
+python3 scripts/test_camera.py                  # with a monitor on HDMI: live preview, press q
+python3 scripts/test_camera.py --no-display     # over SSH / no monitor: grabs 100 frames, saves outputs/camera_test.jpg
 ```
 
 ### 11. Enroll people, then identify
@@ -261,9 +261,27 @@ Stand 2-3 m from the camera so your **whole body** (head to feet) is in
 frame, in decent light, and walk **across** the view.
 
 ```bash
-python scripts/enroll.py --name "Alice"        # walk across 3-5 times when prompted
-python scripts/enroll.py --name "Bob"          # enroll at least one more person to test UNKNOWN/match
-python scripts/identify.py --device-id jetson-nano-01
+python3 scripts/enroll.py --name "Alice"        # walk across 3-5 times when prompted
+python3 scripts/enroll.py --name "Bob"          # enroll at least one more person to test UNKNOWN/match
+python3 scripts/identify.py --device-id jetson-nano-01
+```
+
+`enroll.py` opens a live preview: skeleton overlay, `Pass N/5`, a frame
+counter for the current pass, and a green border while you're tracked (red
+= no pose - get your whole body in view). "Pass N captured" flashes after
+each pass; press `q` in the window to cancel without saving. Over SSH it
+falls back to terminal-only automatically; add `--no-display` to force that,
+or `export DISPLAY=:0` first to show the window on the Nano's monitor.
+
+`identify.py` opens the same kind of preview (skeleton, tracking border,
+`Enrolled: N`, frame counter) and keeps the latest result at the bottom:
+the name and similarity in green, or `UNKNOWN (0.61)` in orange. Press
+`q` to stop. It supports the same `--no-display` flag and SSH fallback.
+
+To remove a test enrollment:
+
+```bash
+python3 -c "from src.database.gait_database import GaitDatabase; GaitDatabase().delete_identity('Alice')"
 ```
 
 ### 12. Where the output is
@@ -321,14 +339,27 @@ it. CSI: `sudo systemctl restart nvargus-daemon`, reseat the ribbon cable
 with the board powered off, and re-run the `gst-launch-1.0` check.
 
 **`cv2.imshow` errors over SSH.** No display attached. Use
-`python scripts/test_camera.py --no-display`. `enroll.py` and `identify.py`
-never open a window.
+`--no-display` on `test_camera.py`, `enroll.py` or `identify.py`.
 
 **MediaPipe wheel download fails or `mp.solutions.pose` is missing.** The
 PINTO0309 download script pulls from an external host and can rot. Fallback
 is building MediaPipe from source on the Nano (many hours), or replacing
 pose estimation with `trt_pose` (different landmarks - would need the 78-dim
 feature builder adapted and the model re-validated). See `docs/DEPLOYMENT.md`.
+
+**`enroll.py`/`identify.py` crash with `HTTPError: HTTP Error 404: Not
+Found`, "Downloading model to .../mediapipe/modules/pose_landmark/
+pose_landmark_lite.tflite".** mediapipe 0.8.5's legacy `mp.solutions.pose`
+auto-downloads that `.tflite` from `github.com/google/mediapipe/raw/master/`
+on first use - that repo has since moved to `google-ai-edge/mediapipe` and
+the old master-relative path 404s. Fix: download the file once from a tag
+that still has it, and drop it at the exact path the traceback names (skips
+the broken download - mediapipe uses the local copy if it's already there):
+
+```bash
+wget -O .venv/lib/python3.6/site-packages/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite \
+    https://raw.githubusercontent.com/google-ai-edge/mediapipe/v0.8.9/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite
+```
 
 ---
 
