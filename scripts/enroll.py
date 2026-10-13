@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.enrollment.enrollment_manager import enroll_from_camera
 from src.utils.config import load_config
-from src.utils.preview import display_available
+from src.utils.preview import display_available, set_fullscreen, show_enrolled_skeleton
 
 
 def main() -> int:
@@ -22,7 +22,12 @@ def main() -> int:
     parser.add_argument("--name", required=True, help="Name of the person to enroll")
     parser.add_argument("--no-display", action="store_true",
                         help="Don't open the live preview window")
+    parser.add_argument("--fullscreen", action="store_true",
+                        help="Fill the whole screen (e.g. the chassis LCD)")
+    parser.add_argument("--no-replay", action="store_true",
+                        help="Skip the enrolled-skeleton replay screen after saving")
     args = parser.parse_args()
+    set_fullscreen(args.fullscreen)
 
     show_preview = not args.no_display
     if show_preview and not display_available():
@@ -51,6 +56,16 @@ def main() -> int:
     print(f"\nEnrolled '{outcome.person_name}' "
           f"({outcome.num_sequences} sequences, avg quality {outcome.average_quality:.0%})")
     print(f"person_id: {outcome.person_id}")
+
+    if show_preview and not args.no_replay:
+        print("Showing the enrolled gait skeleton - press q in the window to close.")
+        show_enrolled_skeleton(
+            outcome.best_pose_sequence,
+            f"ENROLLED: {outcome.person_name}",
+            [f"{outcome.num_sequences} walk passes",
+             f"Avg pose quality {outcome.average_quality:.0%}"],
+            size=tuple(config["camera"]["resolution"]),
+        )
     return 0
 
 

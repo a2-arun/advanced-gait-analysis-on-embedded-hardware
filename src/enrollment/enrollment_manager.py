@@ -27,6 +27,7 @@ class EnrollmentOutcome:
     person_id: str
     num_sequences: int
     average_quality: float
+    best_pose_sequence: Optional[np.ndarray] = None  # (T, 33, 3) of the highest-quality pass
 
 
 def enroll_from_camera(
@@ -131,4 +132,5 @@ def enroll_from_camera(
         person_id=person_id,
         num_sequences=len(captured),
         average_quality=average_quality,
+        best_pose_sequence=max(captured, key=lambda c: c.pose_quality).raw_pose_sequence,
     )
