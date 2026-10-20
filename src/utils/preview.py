@@ -1,4 +1,4 @@
-"""Live OpenCV preview shared by enrollment and identification."""
+"""Historical OpenCV overlay helpers; verification itself processes recorded takes."""
 
 import os
 import sys

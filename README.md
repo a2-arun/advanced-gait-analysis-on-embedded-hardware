@@ -1,408 +1,319 @@
-# Gait Edge Identification
+# Gait claimed-identity verification on Jetson Nano
 
-Real-time **person identification from gait**, extracted from a live camera
-feed, running on a laptop or on an NVIDIA Jetson Nano.
+Give the system a walking video and a claimed enrolled ID. It compares gait with
+**that person's reference walks only**. With usable input and an approved calibration
+policy it returns **TRUE** or **FALSE: gait does not match the claimed identity**.
+It never searches for another person, lists candidates, or treats mismatch as proof
+of a deepfake. Capture, decoding, pose extraction, frozen GaitPT inference, reference
+storage and comparison all run **locally on the original Jetson Nano**.
 
-- **Jetson Nano (JetPack 4.6, Python 3.6):** jump to [Jetson Nano setup](#jetson-nano-setup-jetpack-46--python-36)
-- **Laptop (Windows/Linux/macOS, Python 3.8+):** jump to [Laptop quick start](#laptop-quick-start)
+This branch implements the Nano engineering port of the research rearchitecture.
+**No calibrated threshold is bundled.** A usable enrolled query currently returns
+`POLICY_NOT_READY` with `verdict: null`. Nano hardware execution, timing/memory,
+the capture pilot and new-cohort accuracy remain unvalidated. See
+[architecture](docs/ARCHITECTURE.md) and [validation record](docs/NANO_MIGRATION_VALIDATION.md).
 
-## Relationship to the research project
+## Daily use: enroll, then verify the claimed identity
 
-This project reuses the gait representation and trained model from a
-separate research project, **Deepfake Detection Using Gait Analysis**
-(sibling repo), which asks *"does this video's walk match the identity it
-claims?"* to catch face-swapped video. A live camera feed can't be a
-deepfake - there's no video file to have swapped a face onto - so that
-framing doesn't apply here. What this project keeps is the underlying
-question the model was actually trained to answer (*"does this gait match
-that enrolled signature?"*) and repurposes it for open-set identification:
-compare a live gait sequence against everyone enrolled and report the best
-match, or "unknown" if nobody clears the threshold.
-
-**Read `docs/ARCHITECTURE.md` before touching the model/matching code** -
-several assumptions in earlier planning turned out to be wrong once the
-checkpoint and research code were actually inspected (wrong embedding
-dimension, an unvalidated normalization plan, and an incorrect assumption
-that matching works via cosine similarity on embeddings). That document
-records what's actually true and why.
-
-## Pipeline
-
-```
-Camera (USB webcam or MIPI CSI)
-  -> Pose extraction (MediaPipe, 12 gait-relevant landmarks)
-  -> 78-dim/frame gait features (coordinates + angles + velocities)
-  -> 60-frame sequence buffer
-  -> Trained CNN+BiLSTM+Transformer verification head, run against
-     every enrolled identity
-  -> IDENTIFIED: <name> (similarity: 0.94)   or   UNKNOWN PERSON
-  -> Identity event (JSON, for downstream automation/RPA)
-```
-
-## Project layout
-
-```
-config.yaml               # single source of truth for model/camera/db/threshold config
-requirements.txt          # laptop dependencies (Python 3.8+)
-requirements-jetson.txt   # Jetson Nano dependencies (Python 3.6) - torch/mediapipe come from wheels, see below
-init_db.py                # one-time SQLite schema setup
-
-models/                   # model architecture + checkpoint (full_hybrid_best.pth is committed)
-database/                 # SQLite schema definition
-
-src/
-  camera/                 # camera capture (USB index or GStreamer/CSI pipeline)
-  pose/                   # MediaPipe extraction + the 78-dim feature builder (shared by offline/live)
-  features/               # live camera -> gait-sequence buffering
-  model/                  # checkpoint loading + 1:N identification
-  database/               # enrolled-identity gallery + event log CRUD
-  enrollment/             # "walk in front of the camera a few times" flow
-  identification/         # ties camera+model+database+events into the live loop
-  events/                 # structured identity events for RPA/automation
-  utils/                  # config loading, logging
-
-scripts/
-  test_camera.py          # verify the camera works before anything else (--no-display for SSH)
-  enroll.py               # enroll a new identity
-  identify.py             # run live identification
-
-docs/
-  ARCHITECTURE.md          # what's actually true about the model/pipeline, and why
-  SETUP.md                 # laptop setup, step by step
-  DEPLOYMENT.md             # Jetson background: compatibility risks and why
-  phase-reports/            # historical planning docs, superseded by ARCHITECTURE.md
-
-tests/
-  test_model_loading.py     # checkpoint/architecture sanity checks
-  investigate_checkpoint.py, check_metrics.py   # one-off diagnostic scripts
-```
-
----
-
-## Jetson Nano setup (JetPack 4.6 / Python 3.6)
-
-Target: Jetson Nano Developer Kit 4GB, JetPack 4.6.x (L4T R32.7.x),
-Ubuntu 18.04, Python 3.6.9, CUDA 10.2.
-
-### Why the normal `pip install -r requirements.txt` fails here
-
-`requirements.txt` asks for `torch>=2.1` and `mediapipe>=0.10`. Both need
-Python 3.8+ and neither ships a Python 3.6 / aarch64 build, so pip answers
-*"No matching distribution found"*. The Nano cannot move past Python 3.6
-without leaving JetPack's supported stack, so instead this repo uses:
-
-| Package | Laptop | Jetson Nano |
-|---|---|---|
-| PyTorch | `torch>=2.1` from PyPI | **torch 1.10.0**, NVIDIA's CUDA 10.2 wheel (last release for Python 3.6) |
-| MediaPipe | 0.10.x Tasks API | **0.8.5**, PINTO0309's prebuilt cp36 aarch64 wheel, legacy `mp.solutions.pose` API |
-| OpenCV | `opencv-python` | JetPack's own system OpenCV (has GStreamer for CSI cameras) |
-
-The code handles both automatically (`src/pose/pose_extraction.py` falls
-back to `mp.solutions.pose` when the Tasks API is missing;
-`src/model/gait_model.py` loads the checkpoint on old and new torch). The
-checkpoint contains only plain tensors, so it loads fine on torch 1.10.
-
-> **Status:** these steps were assembled from NVIDIA's and PINTO0309's
-> published instructions and checked against this repo's code, but they have
-> **not been run end to end on a physical Nano yet**. Each step has a check;
-> if one fails, see [Troubleshooting](#jetson-troubleshooting) and tell me the
-> output.
-
-### 1. Confirm the board
+After completing the one-time Nano setup below, activate its `.venv` and run:
 
 ```bash
-cat /etc/nv_tegra_release      # expect R32 (release), REVISION: 7.x
-python3 --version              # expect Python 3.6.9
-nvcc --version                 # expect CUDA 10.2
-free -h                        # ~4GB RAM
-df -h /                        # need >= 6GB free on the microSD card
+python scripts/check_nano.py --capture-test
+python scripts/gait.py check --require-nano
+python scripts/enroll.py --name Abhishek --consent --single-walker-reviewed
+python scripts/identify.py --identity Abhishek --consent --single-walker-reviewed
 ```
 
-### 2. Max performance + swap (do this first - 4GB RAM is tight)
+The first two commands are startup checks: packages/CUDA/media/camera, then the
+real pose graph and frozen model. Repeat them after dependency or device changes.
+For daily use you need only the last **two scripts**. Each records a fresh **30-second
+walk from `/dev/video0`**, then processes it on the Nano. No display, separate
+capture command, manual registration command or `init_db.py` invocation is needed.
+`--seconds` changes duration; `--device /dev/video1` selects another USB camera.
+
+`enroll.py` commits a normalized walk reference to the file-backed database and
+prints `ENROLLED`, its database path and reference count. Re-running it records a
+new independent take and adds another reference. `identify.py` requires the supplied
+identity and compares only its references; it does not identify the walker.
+`verify.py` is an equivalent entry point. `--subject-id` and `--claimed-id` remain
+aliases for `--name` and `--identity`. IDs are case-sensitive single-token IDs;
+pseudonyms are recommended.
+
+`--consent` records the operator's consent attestation for this capture; use it only
+when consent has actually been obtained. An existing `--consent-ref` can be supplied
+instead. `--single-walker-reviewed` attests a reviewed file or a supervised live scene
+with one walker and no bystanders; the old pose backend cannot count people.
+
+Camera enrollment is registered as `operational`, outside scientific splits. Query
+captures have **no asserted subject identity**: the claim is not a ground-truth label.
+Their source files and hashes are preserved under `data/raw/camera/`. Do not mix
+operational enrollments with the same ID's study-role enrollment in one registry;
+use a separate config/store for managed research.
+
+**The default is still `POLICY_NOT_READY`, not TRUE/FALSE**, until a valid policy for
+this exact Nano recipe/reference count is installed. A missing identity, bad gait or
+startup error also produces a non-Boolean status. No threshold is invented here.
+Physical Nano execution still needs the two startup checks on your actual device.
+
+For an existing original video, add `--video` to either script. Already registered
+originals work directly. For an unregistered original, explicitly add
+`--register-original --consent` (or `--consent-ref`); never use that option for a
+re-encoded/stabilized copy or window. For example:
 
 ```bash
-sudo nvpmodel -m 0             # MAXN power mode (use a 5V 4A barrel-jack supply, jumper J48)
-sudo jetson_clocks             # lock clocks at max
-
-# 4GB swap file - importing torch + MediaPipe can otherwise get OOM-killed
-sudo fallocate -l 4G /mnt/4GB.swap
-sudo chmod 600 /mnt/4GB.swap
-sudo mkswap /mnt/4GB.swap
-sudo swapon /mnt/4GB.swap
-echo '/mnt/4GB.swap none swap sw 0 0' | sudo tee -a /etc/fstab
-free -h                        # Swap should now show ~4G
+python scripts/enroll.py --name Abhishek --video /path/to/reference.mp4 \
+  --register-original --consent --single-walker-reviewed
+python scripts/identify.py --identity Abhishek --video /path/to/different-query.mp4 \
+  --register-original --consent --single-walker-reviewed
 ```
 
-### 3. System packages
+The query must be a different original from the claimed references. Unknown original
+capture dates are retained as unknown for operational imports; registration time is
+not fabricated as capture time. Managed study registration below still requires full
+actual metadata and explicit development/calibration roles.
+
+## 1. Put this version on the Nano
+
+Start with an original Nano running **JetPack 4.6.x, Ubuntu 18.04, Python 3.6 and
+CUDA 10.2**. Orin Nano is a different platform. NVIDIA's
+[JetPack archive](https://developer.nvidia.com/embedded/jetpack-archive) and
+[PyTorch Jetson compatibility list](https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048)
+are the installation references. The 4 GB Nano is the intended target; no memory
+or real-time guarantee has been measured.
+
+Use the complete working tree containing this migration. The local branch is
+`feat/gait-verification-v2-jetson`; uncommitted changes do not appear in a fresh
+GitHub clone. Copy the reviewed tree to the Nano, or commit/push it before checking
+out that branch there. Do not use an older `master` checkout with this guide.
+
+On the Nano, from the copied repository:
 
 ```bash
+cd ~/advanced-gait-analysis-on-embedded-hardware
+umask 077
+cat /etc/nv_tegra_release
+python3 --version
+uname -m
 sudo apt update
-sudo apt install -y git python3-pip python3-venv python3-dev \
-    libopenblas-base libopenmpi-dev libomp-dev \
-    libjpeg-dev zlib1g-dev python3-matplotlib sqlite3
-```
-
-`python3-matplotlib` is needed because MediaPipe 0.8.5 imports it and it
-is painful to compile with pip on ARM. JetPack already provides
-`python3-opencv` (with GStreamer); confirm:
-
-```bash
-python3 -c "import cv2; print(cv2.__version__)"
-python3 -c "import cv2; print([l for l in cv2.getBuildInformation().splitlines() if 'GStreamer' in l])"
-```
-
-### 4. Clone the repo
-
-```bash
-cd ~
-git clone https://github.com/a2-arun/advanced-gait-analysis-on-embedded-hardware.git
-cd advanced-gait-analysis-on-embedded-hardware
-ls models/checkpoint/full_hybrid_best.pth      # the model is committed - no extra download
-```
-
-### 5. Virtual environment (with system site-packages)
-
-`--system-site-packages` is what lets the venv see JetPack's OpenCV.
-
-```bash
+sudo apt install -y python3-venv python3-dev python3-matplotlib \
+  libopenblas-base libopenmpi-dev ffmpeg v4l-utils git unzip wget
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
-pip install --upgrade "pip==21.3.1" "setuptools==59.6.0" wheel   # last versions supporting Python 3.6
-
-# Nano-specific environment fixes (see Troubleshooting for why)
-echo 'export OPENBLAS_CORETYPE=ARMV8' >> ~/.bashrc
-export OPENBLAS_CORETYPE=ARMV8
+python -m pip install 'pip==21.3.1' 'setuptools==59.6.0' 'wheel==0.37.1'
+python -m pip install --only-binary=:all: -r requirements-jetson.txt
 ```
 
-Every new terminal: `cd ~/advanced-gait-analysis-on-embedded-hardware && source .venv/bin/activate`.
+Keep JetPack's system OpenCV 4.1.1 exposed by `--system-site-packages`. Verify it with
+`python -c "import cv2; print(cv2.__version__)"`. If absent, restore the OpenCV
+component from your matching JetPack installation; do not replace it with a pip wheel. The Nano requirements
+are separate from the modern workstation requirements; install each on its stated
+machine. Camera preview uses OpenCV, while verification uses FFmpeg for decoding.
 
-### 6. Python dependencies
+## 2. Install the Nano framework wheels
+
+Use NVIDIA's Python 3.6/aarch64 CUDA-enabled PyTorch 1.10 wheel from its compatibility
+list. The link below is listed by NVIDIA; download availability and installation
+must still be checked on the device. No torchvision is needed for GaitPT.
 
 ```bash
-pip install -r requirements-jetson.txt
+mkdir -p .cache/installers
+wget -O .cache/installers/torch-1.10.0-cp36-cp36m-linux_aarch64.whl \
+  https://nvidia.box.com/shared/static/fjtbno0vpo676a25cgvuqc1wty0fkkg6.whl
+python -m pip install --no-deps .cache/installers/torch-1.10.0-cp36-cp36m-linux_aarch64.whl
+python -c "import torch; print(torch.__version__, torch.version.cuda); assert torch.cuda.is_available()"
 ```
 
-### 7. PyTorch 1.10.0 (NVIDIA wheel, GPU-enabled)
+For MediaPipe 0.8.5 use the **experimental community Nano wheel**, documented by
+[its publisher](https://github.com/PINTO0309/mediapipe-bin). This is an explicit
+deployment dependency, not an official Google Nano wheel or a tested JetPack 4.6
+certification. Download the release and select exactly the CUDA 10.2, Python 3.6,
+aarch64, NumPy 1.19 wheel:
 
 ```bash
-pip install 'Cython<3'
-wget https://nvidia.box.com/shared/static/fjtbno0vpo676a25cgvuqc1wty0fkkg6.whl \
-     -O torch-1.10.0-cp36-cp36m-linux_aarch64.whl
-pip install torch-1.10.0-cp36-cp36m-linux_aarch64.whl
+wget -O .cache/installers/mediapipe-v0.8.5.zip \
+  https://github.com/PINTO0309/mediapipe-bin/releases/download/v0.8.5/v0.8.5.zip
+unzip .cache/installers/mediapipe-v0.8.5.zip -d .cache/installers/mediapipe-v0.8.5
+find .cache/installers/mediapipe-v0.8.5 -name '*cuda102*cp36*linux_aarch64.whl'
 ```
 
-Check (the second line must print `True`):
+Install the displayed `numpy119x` wheel with `python -m pip install --no-deps
+/exact/path/to/mediapipe-0.8.5_cuda102-cp36-cp36m-linux_aarch64.whl`.
+`--no-deps` avoids replacing JetPack OpenCV. Then verify:
 
 ```bash
-python3 -c "import torch; print(torch.__version__)"                 # 1.10.0
-python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python -c "import cv2, numpy, mediapipe as mp; print(cv2.__version__, numpy.__version__, mp.__version__); assert mp.__version__ == '0.8.5'"
 ```
 
-Do **not** `pip install torch` from PyPI on the Nano - those wheels have no
-CUDA support for this board.
-
-### 8. MediaPipe 0.8.5 (PINTO0309 prebuilt wheel)
+The runtime requires both `modules/pose_detection/pose_detection.tflite` and
+`modules/pose_landmark/pose_landmark_lite.tflite` under the installed MediaPipe
+package. It refuses implicit downloads. The lite model was absent in some older
+wheels, whose original download URL now fails. If necessary, install this tagged
+upstream asset **before calibration**:
 
 ```bash
-cd ~
-git clone https://github.com/PINTO0309/mediapipe-bin.git
-cd mediapipe-bin
-chmod +x ./v0.8.5/download.sh && ./v0.8.5/download.sh
-unzip -o v0.8.5.zip -d v0.8.5
-
-# --no-deps: the wheel's metadata pulls opencv-python, which would spend hours
-# compiling. We use JetPack's OpenCV instead; the other deps are already in step 6.
-cd ~/advanced-gait-analysis-on-embedded-hardware
-pip install --no-deps "$(find ~/mediapipe-bin -name 'mediapipe-0.8.5_cuda102-cp36-cp36m-linux_aarch64.whl' | grep numpy119x | head -1)"
+POSE_PACKAGE=$(python -c 'import pathlib, mediapipe; print(pathlib.Path(mediapipe.__file__).parent)')
+test -f "$POSE_PACKAGE/modules/pose_detection/pose_detection.tflite"
+# Run only if the lite asset is missing; preserve any existing validated asset.
+test -f "$POSE_PACKAGE/modules/pose_landmark/pose_landmark_lite.tflite" || \
+  wget -O "$POSE_PACKAGE/modules/pose_landmark/pose_landmark_lite.tflite" \
+  https://raw.githubusercontent.com/google-ai-edge/mediapipe/v0.8.9/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite
 ```
 
-Check that pose is present:
+This asset/graph combination still needs the on-device check below. Both asset
+hashes enter the recipe; changing a wheel or asset invalidates its calibration.
+
+## 3. Install the frozen GaitPT source and safe numeric weights
+
+On the Nano, keep the upstream source unmodified and pinned:
 
 ```bash
-python3 -c "import mediapipe as mp; print(mp.__version__, mp.solutions.pose.Pose)"
+mkdir -p .cache
+git clone https://github.com/UbiquitousCognitiveSystems/GaitPT.git .cache/GaitPT
+git -C .cache/GaitPT checkout 4977618a36ef77ee9a2863c9f8e27ab862894d70
 ```
 
-If it says `No module named 'X'`, `pip install X` and retry (the wheel was
-installed without dependency resolution).
+Use the official **GREW** checkpoint linked by the
+[GaitPT authors](https://github.com/UbiquitousCognitiveSystems/GaitPT). Required SHA-256:
 
-### 9. Verify the model loads and runs (uses the GPU automatically)
-
-```bash
-python3 init_db.py
-python3 tests/test_model_loading.py
+```text
+e6b287e2c2ae27a9344b8009077c9d4f70811d2d6f3ff20198b99bfa4f824637
 ```
 
-Expected: every test prints `[OK] PASS`, and Test 5 reports
-`CUDA available: NVIDIA Tegra X1`.
-
-### 10. Verify the camera
-
-**USB webcam:** plug it in, then `ls /dev/video*` should list `/dev/video0`.
-The default `camera.device_id: 0` in `config.yaml` is correct.
-
-**MIPI CSI camera (IMX219 etc.):** in `config.yaml`, replace
-`device_id: 0` with the GStreamer pipeline string shown in the comment
-directly above it. Test the sensor outside Python first:
+Prepare a pickle-free bundle once on a **modern workstation** with Python >=3.10
+and PyTorch >=2.6. This is offline artifact packaging; video/pose/inference never
+uses that workstation. From this repository there:
 
 ```bash
-gst-launch-1.0 nvarguscamerasrc num-buffers=60 ! 'video/x-raw(memory:NVMM),width=1280,height=720' ! nvvidconv ! fakesink
+python3 -m venv .venv-prepare
+source .venv-prepare/bin/activate
+python -m pip install -r requirements.txt
+python scripts/prepare_gaitpt.py \
+  --checkpoint /path/to/grew-checkpoint.pth \
+  --output .cache/gaitpt-grew-npz
 ```
 
-Then test through the project:
+The exporter checks the original hash and uses `weights_only=True`, with no unsafe
+fallback. Copy the resulting directory, containing `manifest.json` and `weights.npz`,
+to the Nano's `.cache/gaitpt-grew-npz`. Do not deserialize `.pth` files on the Nano.
+The numeric loader uses `allow_pickle=False`, checks archive limits, hashes, keys,
+shapes and finite float32 arrays, and loads weights strictly. No training occurs.
+
+GaitPT's source is **CC BY-NC-ND 4.0**. Preserve its license and attribution;
+permission for the intended use and distribution remains a deployment gate. Bundles
+are ignored local artifacts and are not published by these commands.
+
+## 4. Check local inference and camera
+
+Back on the Nano with its `.venv` activated:
 
 ```bash
-python3 scripts/test_camera.py                  # with a monitor on HDMI: live preview, press q
-python3 scripts/test_camera.py --no-display     # over SSH / no monitor: grabs 100 frames, saves outputs/camera_test.jpg
-```
-
-### 11. Enroll people, then identify
-
-Stand 2-3 m from the camera so your **whole body** (head to feet) is in
-frame, in decent light, and walk **across** the view.
-
-```bash
-python3 scripts/enroll.py --name "Alice"        # walk across 3-5 times when prompted
-python3 scripts/enroll.py --name "Bob"          # enroll at least one more person to test UNKNOWN/match
-python3 scripts/identify.py --device-id jetson-nano-01
-```
-
-`enroll.py` opens a live preview: skeleton overlay, `Pass N/5`, a frame
-counter for the current pass, and a green border while you're tracked (red
-= no pose - get your whole body in view). "Pass N captured" flashes after
-each pass; press `q` in the window to cancel without saving. Over SSH it
-falls back to terminal-only automatically; add `--no-display` to force that,
-or `export DISPLAY=:0` first to show the window on the Nano's monitor.
-
-`identify.py` opens the same kind of preview (skeleton, tracking border,
-`Enrolled: N`, frame counter) and keeps the latest result at the bottom:
-the name and similarity in green, or `UNKNOWN (0.61)` in orange. Press
-`q` to stop. It supports the same `--no-display` flag and SSH fallback.
-
-To remove a test enrollment:
-
-```bash
-python3 -c "from src.database.gait_database import GaitDatabase; GaitDatabase().delete_identity('Alice')"
-```
-
-### 12. Where the output is
-
-| What | Where |
-|---|---|
-| Live result | the terminal: `IDENTIFIED: Alice (similarity: 0.94)` or `UNKNOWN PERSON ...` |
-| One JSON event per identification | `outputs/events/*.json` |
-| Log file | `outputs/logs/gait_identification.log` |
-| Enrolled people + every identification attempt | `database/gait.db` |
-
-```bash
-sqlite3 database/gait.db "select person_name, num_samples, quality_score from enrolled_identities;"
-sqlite3 database/gait.db "select timestamp,status,identified_person_name,top_similarity_score,processing_time_ms from identification_events order by id desc limit 10;"
-ls -t outputs/events | head -3
-```
-
-For the performance numbers this project still owes (see
-`docs/ARCHITECTURE.md` #7), run `tegrastats` in a second terminal while
-`identify.py` is running, and read `processing_time_ms` from the query
-above. MediaPipe pose extraction on the Nano's CPU is the bottleneck, not
-the model. Real-time speed on this board is **unmeasured** - the first run
-will tell us.
-
-### Jetson troubleshooting
-
-**`No matching distribution found for torch>=2.1` / `mediapipe>=0.10`.**
-You ran `pip install -r requirements.txt`, which is the laptop file. Use
-steps 6-8 above.
-
-**`Illegal instruction (core dumped)` on `import numpy` / `import torch`.**
-`export OPENBLAS_CORETYPE=ARMV8` (step 5 adds it to `~/.bashrc`; open a new
-terminal or `source ~/.bashrc`).
-
-**`cannot allocate memory in static TLS block` on import.**
-`export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1` before running.
-
-**`torch.cuda.is_available()` is `False`.** You have a non-NVIDIA torch
-wheel. `pip uninstall torch`, redo step 7. The pipeline still runs on CPU
-(`model.device: "auto"` in `config.yaml`), just slower.
-
-**Process `Killed` / system freezes.** Out of RAM. Confirm swap is on
-(`free -h`), close the desktop browser, and consider running headless
-(`sudo systemctl set-default multi-user.target`, reboot).
-
-**`ImportError: ... dataclasses` / `No module named 'dataclasses'`.**
-`pip install dataclasses` (it's in `requirements-jetson.txt`; you're
-probably not inside the venv).
-
-**`import cv2` fails inside the venv.** The venv was created without
-`--system-site-packages`. Delete `.venv` and redo step 5.
-
-**Camera won't open.** USB: `ls /dev/video*`; make sure nothing else is using
-it. CSI: `sudo systemctl restart nvargus-daemon`, reseat the ribbon cable
-with the board powered off, and re-run the `gst-launch-1.0` check.
-
-**`cv2.imshow` errors over SSH.** No display attached. Use
-`--no-display` on `test_camera.py`, `enroll.py` or `identify.py`.
-
-**MediaPipe wheel download fails or `mp.solutions.pose` is missing.** The
-PINTO0309 download script pulls from an external host and can rot. Fallback
-is building MediaPipe from source on the Nano (many hours), or replacing
-pose estimation with `trt_pose` (different landmarks - would need the 78-dim
-feature builder adapted and the model re-validated). See `docs/DEPLOYMENT.md`.
-
-**`enroll.py`/`identify.py` crash with `HTTPError: HTTP Error 404: Not
-Found`, "Downloading model to .../mediapipe/modules/pose_landmark/
-pose_landmark_lite.tflite".** mediapipe 0.8.5's legacy `mp.solutions.pose`
-auto-downloads that `.tflite` from `github.com/google/mediapipe/raw/master/`
-on first use - that repo has since moved to `google-ai-edge/mediapipe` and
-the old master-relative path 404s. Fix: download the file once from a tag
-that still has it, and drop it at the exact path the traceback names (skips
-the broken download - mediapipe uses the local copy if it's already there):
-
-```bash
-wget -O .venv/lib/python3.6/site-packages/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite \
-    https://raw.githubusercontent.com/google-ai-edge/mediapipe/v0.8.9/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite
-```
-
----
-
-## Laptop quick start
-
-See `docs/SETUP.md` for the full walkthrough. Short version:
-
-```bash
-python -m venv .venv && .venv\Scripts\activate   # or source .venv/bin/activate
-pip install -r requirements.txt
-
-# models/checkpoint/full_hybrid_best.pth is already committed in this repo
-
+python scripts/gait.py check --require-nano
 python init_db.py
-python tests/test_model_loading.py
-python scripts/test_camera.py
-
-python scripts/enroll.py --name "Alice"
-python scripts/identify.py
+v4l2-ctl --list-devices
+python scripts/test_camera.py --no-display
 ```
 
-## Status
+`check` requires original Nano hardware, checks the pinned artifacts and local pose
+graph, runs the frozen model twice, and reports the measured embedding dimension
+and recipe hash. It fails if CUDA is unavailable; there is no automatic CPU or remote
+fallback. Keep the output for the device validation record. `tegrastats` can record
+RAM, temperature and GPU use during actual enrollment/query processing.
 
-Laptop pipeline (camera -> pose -> features -> model -> identification ->
-database -> events) is implemented end to end. Jetson Nano install path is
-documented above and the code is compatible with its Python 3.6 / torch
-1.10 / mediapipe 0.8.5 stack, but has not yet been run on the device. Not
-yet validated with a real enrolled gallery and real walking subjects on
-either platform.
+For a USB camera, record independent walking takes locally:
 
-## Known limitations
+```bash
+python scripts/gait.py capture --output data/raw/S001_left45_take1.mp4 --seconds 30
+python scripts/gait.py capture --output data/raw/S001_toward_take2.mp4 --seconds 30
+```
 
-- The model was trained on 13 subjects; treat identification accuracy
-  claims accordingly (see `docs/ARCHITECTURE.md` #7 for the full list).
-- The similarity threshold (0.7737) was calibrated for 1:1 verification,
-  not open-set identification against a growing gallery - revisit once
-  there's real enrollment data.
-- On the Jetson the pose backend is MediaPipe 0.8.5's legacy `Pose` in
-  tracking mode with the lite model, not the 0.10 Tasks `PoseLandmarker`
-  the laptop uses. Landmarks are the same 33-point layout, but small numeric
-  differences mean enrollments made on one platform should not be assumed to
-  match on the other - enroll and identify on the same device.
-- No liveness/spoof detection. This is a biometric identification system,
-  not an access-control security system.
-- MediaPipe pose extraction (CPU) is the pipeline's latency bottleneck, not
-  the ~850K-parameter model.
+Each command starts a separate V4L2 recording and refuses an existing output.
+Capture uses source timestamps through FFmpeg without frame-rate resampling.
+Use `--device /dev/video1` for another USB camera. CSI capture and camera settings
+are described in [setup](docs/SETUP.md). Existing phone originals can be copied
+unchanged into `data/raw/`; supported inputs have one video stream, ordered PTS,
+31–7,200 frames, at most 120 seconds and up to 1920×1080 (including portrait rotation).
+Keep the entire walker and feet visible. Review each video for one walker and no
+bystanders; legacy MediaPipe cannot prove that condition automatically.
+
+## 5. Advanced: register managed study originals and enroll
+
+Register only genuine original takes, never stabilized/re-encoded copies or windows.
+Use pseudonymous IDs and actual capture time/session/view/consent references. The
+dates below illustrate the syntax; replace them with actual capture metadata.
+Subjects used for development and calibration must be disjoint. Locked-final study
+data belongs in the protected research workflow and is refused by this Nano port.
+
+```bash
+python scripts/gait.py register --video data/raw/S001_left45_take1.mp4 \
+  --subject-id S001 --take-id S001_left45_take1 --session-id day1 --view left45 \
+  --role development --consent-ref consent-S001 --captured-at '2026-10-20T10:00:00+05:30'
+python scripts/gait.py register --video data/raw/S001_toward_take2.mp4 \
+  --subject-id S001 --take-id S001_toward_take2 --session-id day1 --view toward \
+  --role development --consent-ref consent-S001 --captured-at '2026-10-20T10:02:00+05:30'
+python scripts/enroll.py --video data/raw/S001_left45_take1.mp4 \
+  --subject-id S001 --single-walker-reviewed
+```
+
+To add references, record/register/enroll **different original takes**. One reference
+is stored per take; rolling windows are never independent enrollments. The store
+derives a normalized centroid from that claim's walk embeddings. No scientifically
+validated minimum reference count has been selected. The example holds the whole
+second take out as a query. Four views on one day do not establish different-day
+reliability.
+
+## 6. Verify an explicit claim from an already registered original
+
+```bash
+python scripts/verify.py --video data/raw/S001_toward_take2.mp4 \
+  --claimed-id S001 --single-walker-reviewed
+```
+
+To test a wrong claim, supply another **enrolled** ID in the same study role. It
+compares only that claim's references. It never returns whose gait the video may
+actually contain. Reusing a claimed reference take as its query is refused.
+
+| Status | Verdict | Meaning |
+|---|---|---|
+| `OK` | `true` | TRUE: gait supports the supplied claim |
+| `OK` | `false` | FALSE: gait does not match the supplied claim |
+| `CLAIM_NOT_ENROLLED` | `null` | No enrollment compatible with this recipe |
+| `INSUFFICIENT_GAIT` | `null` | Too little usable full-body walking evidence |
+| `INVALID_INPUT` | `null` | Bad claim, unregistered input, source reuse or invalid lineage |
+| `PROCESSING_ERROR` | `null` | Local decoder/model/store/runtime failure |
+| `POLICY_NOT_READY` | `null` | No approved threshold/evidence for this exact Nano recipe |
+
+Exit code is `0` for either Boolean verdict, `2` for a non-decision or command error.
+Parse `verdict` to distinguish TRUE from FALSE. Public events in
+`outputs/verification-events/` contain no scores, candidate list or other identity.
+Operator failures go to `outputs/logs/verification.log`. New artifacts are private
+by filesystem permission, not encrypted or authenticated.
+
+## 7. Calibrate and validate before enabling Boolean decisions
+
+The default `policy: null` is intentional. Use consenting development/calibration
+recordings to validate the **Nano MediaPipe recipe**, then freeze an operating point
+with subject/take separation and coverage reporting. A research RTMPose threshold,
+workstation recipe, legacy threshold or source benchmark cannot substitute.
+Optional `--private-diagnostics-dir outputs/private-scores` on `verify.py` writes
+restricted, recipe-bound score records for authorized offline evaluation; stdout
+and public events remain score-free. It does not fit a threshold.
+
+The [policy contract](docs/DEPLOYMENT.md) describes the operator-approved evidence
+bundle that can enable TRUE/FALSE. No arbitrary operational threshold is installed.
+Physical Nano performance, quality-policy validation, representative pilot,
+new-cohort comparison/calibration, licensing and final evaluation are still required.
+GaitPT is the first integrated candidate; GPGait++/GPGait and preserved E0 remain
+comparative research systems, not selected winners or silently substituted Nano backends.
+
+## Development and historical material
+
+On the modern workstation: `python -m pytest` after installing `requirements.txt`.
+The active runtime retains Python 3.6 syntax/API compatibility. CPU is an explicit
+engineering option in a separate config; it is not the Nano CUDA acceptance test.
+
+The old active implementation, commands/config/docs and standalone checkpoint
+diagnostics are archived under [legacy/](legacy/README_ARCHIVE.md). The old
+`models/`, committed checkpoint, `OLD_README.md`, phase reports, old database and
+existing outputs remain historical assets. Old templates cannot be migrated into
+GaitPT embeddings; re-enroll independent originals. `scripts/identify.py` now serves
+as a claim-only verification alias. Start with the two-script commands above.

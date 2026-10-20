@@ -1,64 +1,10 @@
-#!/usr/bin/env python
-"""Run live gait identification against the enrolled gallery.
-
-Usage:
-    python scripts/identify.py
-    python scripts/identify.py --device-id jetson-01   # tag events by device
-    python scripts/identify.py --no-display            # over SSH / no monitor
-"""
-
-import argparse
+#!/usr/bin/env python3
+"""Verify the explicitly supplied identity claim; never search for another person."""
+import os
 import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.identification.identifier import GaitIdentifier
-from src.model.gait_model import IdentificationResult
-from src.utils.config import load_config
-from src.utils.preview import display_available
-
-
-def print_result(result: IdentificationResult) -> None:
-    if result.is_identified:
-        print(f"IDENTIFIED: {result.identified_name}  (similarity: {result.similarity:.4f})")
-    else:
-        print(f"UNKNOWN PERSON  (best candidate similarity: {result.similarity:.4f}, "
-              f"threshold: {result.threshold:.4f})")
-    if len(result.top_k) > 1:
-        others = ", ".join(f"{name}={score:.4f}" for name, score in result.top_k[1:])
-        print(f"  other candidates: {others}")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Live gait identification")
-    parser.add_argument("--device-id", default="laptop", help="Label for this device in logs/events")
-    parser.add_argument("--no-display", action="store_true",
-                        help="Don't open the live preview window")
-    args = parser.parse_args()
-
-    show_preview = not args.no_display
-    if show_preview and not display_available():
-        print("No display found (SSH?) - running without preview. "
-              "Use `export DISPLAY=:0` to show it on the board's monitor.")
-        show_preview = False
-
-    config = load_config()
-
-    with GaitIdentifier(config, device_id=args.device_id) as identifier:
-        gallery_size = len(identifier.db.get_gallery())
-        if gallery_size == 0:
-            print("No identities enrolled yet - run scripts/enroll.py first.")
-            return 1
-
-        print(f"{gallery_size} identities enrolled. Watching for a walking subject "
-              f"({'q in the window or ' if show_preview else ''}Ctrl+C to stop)...\n")
-        try:
-            identifier.run(on_result=print_result, show_preview=show_preview)
-        except KeyboardInterrupt:
-            print("\nStopped.")
-        return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.verification.cli import main
+if __name__ == '__main__':
+    os.umask(0o077)
+    sys.exit(main(['verify'] + sys.argv[1:]))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Sanity-check that the configured camera opens and delivers frames.
-Run this before enroll.py/identify.py - a working camera is the one thing
+Run this before capture/enroll/verify - a working camera is the one thing
 this project cannot substitute for.
 
 Usage: python scripts/test_camera.py
@@ -10,6 +10,8 @@ Press 'q' to quit the preview window, or Ctrl+C in the terminal.
 
 import sys
 import time
+import os
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -47,8 +49,16 @@ def main() -> int:
                 if not frame_count:
                     print("FAILED: camera opened but delivered no frames")
                     return 1
-                cv2.imwrite("outputs/camera_test.jpg", frame)
-                print("Saved last frame to outputs/camera_test.jpg")
+                output_dir = Path('outputs')
+                output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                snapshot = output_dir / ('camera_test-' + uuid.uuid4().hex + '.jpg')
+                fd = os.open(str(snapshot), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.close(fd)
+                if not cv2.imwrite(str(snapshot), frame):
+                    snapshot.unlink()
+                    print('FAILED: could not save camera snapshot')
+                    return 1
+                print('Saved last frame to ' + str(snapshot))
             else:
                 cv2.destroyAllWindows()
             return 0

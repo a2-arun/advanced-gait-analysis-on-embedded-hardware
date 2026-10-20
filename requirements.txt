@@ -1,12 +1,8 @@
-# Laptop development environment (Windows/Linux/macOS).
-# Do NOT use this file on a Jetson Nano (Python 3.6): torch>=2.1 and
-# mediapipe>=0.10 do not exist for that platform, so pip reports "no matching
-# distribution". Use requirements-jetson.txt and the Jetson section of README.md.
-
-torch>=2.1
-numpy>=1.24
-opencv-python>=4.8
-mediapipe>=0.10.9
-pyyaml>=6.0
-pytest>=7.4
-tqdm>=4.65
+# Modern workstation: restricted artifact preparation and engineering tests.
+# The Nano uses requirements-jetson.txt and its NVIDIA torch wheel.
+numpy>=1.24,<3
+PyYAML>=6,<7
+torch>=2.6,<3
+einops>=0.4.1,<0.9
+opencv-python-headless>=4.8,<5
+pytest>=8,<9

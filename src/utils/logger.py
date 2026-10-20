@@ -2,7 +2,6 @@
 
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 from src.utils.config import load_config, resolve_path
 

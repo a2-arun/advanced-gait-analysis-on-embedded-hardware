@@ -1,134 +1,143 @@
-# Architecture
+# Nano verification architecture
 
-This document records what was actually verified by inspecting the research
-repository and the checkpoint itself, as opposed to what earlier planning
-documents assumed. Where the two disagree, this file and the code follow the
-verified behavior. See `docs/phase-reports/` for the superseded plans.
+Status: pre-collection engineering port, 20 October 2026. The owner's explicit
+requirements are verification of a supplied claim only and entirely local execution
+on the original Jetson Nano. The companion research PRD remains the implementation
+contract, with the Nano amendment appended to both copied contract documents.
 
-## 1. Relationship to the research project
+## Local processing boundary
 
-The research project (`Deepfake-Detection`, sibling repo) asks: *"does this
-video's walk match the person it claims to be?"* — a 1:1 **verification**
-task used to catch face-swapped video (the face says A, but gait says B).
-
-This project asks a different question: *"who is walking in front of this
-camera right now?"* — an open-set **identification** task. A live camera
-feed can't be a deepfake (there's no video file to swap a face onto), so the
-authenticity-verification framing doesn't apply here. What carries over is
-the gait representation and the trained model that scores "does this gait
-match that enrolled signature" — identification is just that scoring
-function run against every enrolled person instead of one claimed identity.
-
-Reused as-is: the 78-dim feature engineering (`src/pose/pose_extraction.py`,
-ported from the research repo's `utils/pose_extraction.py`) and the trained
-checkpoint (`models/checkpoint/full_hybrid_best.pth`, copied from
-`outputs/ablation/full_hybrid_best.pth`).
-New in this project: everything that turns those into a live pipeline -
-camera capture, sequence buffering, the identification/enrollment
-orchestration, the SQLite gallery, and event emission.
-
-## 2. Pipeline
-
-```
-Camera frame
-    -> Pose extraction (MediaPipe, 33 landmarks -> 12 gait-relevant)
-    -> Rolling sequence buffer (src/features/gait_features.py)
-    -> Resample to 60 frames, compute 78-dim/frame features
-    -> GaitModel.identify() against the enrolled gallery (src/model/gait_model.py)
-    -> IdentificationResult -> IdentityEvent (src/events/identity_event.py)
+```mermaid
+flowchart TD
+    C[Local camera or immutable video] --> R[Registered original and source checksum]
+    I[Supplied claimed ID] --> S[Read only this claim's references]
+    R --> V[FFmpeg decode and original presentation timestamps]
+    V --> P[MediaPipe 0.8.5 full 33 landmarks]
+    P --> Q{Provisional full-body and temporal quality gate}
+    Q -->|insufficient| A[INSUFFICIENT_GAIT / null]
+    Q -->|usable| N[Official GREW joint mapping and two centered crops]
+    N --> G[Frozen local GaitPT / safe numeric weights]
+    G --> E[Normalized walk embedding]
+    S --> T[Normalized centroid of independent reference walks]
+    E --> M[Cosine comparison to this claim only]
+    T --> M
+    M --> B{Approved policy for exact Nano recipe?}
+    B -->|absent| U[POLICY_NOT_READY / null]
+    B -->|present| O[OK / TRUE or FALSE]
 ```
 
-## 3. The 78-dim feature vector
+All boxes execute on the Nano. Preparing numeric weights on a modern workstation
+is offline artifact packaging; it is not a video/pose/inference service. There is
+no remote client, server endpoint, identity search, gallery ranking or automatic
+CPU fallback. File-based capture followed by batch processing is supported; no
+real-time throughput has been demonstrated.
 
-Per frame, concatenated in this exact order (order matters - it must match
-what the checkpoint was trained on):
+## Frozen model and preprocessing
 
-| Component | Dims | Source |
-|---|---|---|
-| Hip-centered 3D coordinates | 36 (12 x 3) | 12 gait landmarks: shoulders, hips, knees, ankles, heels, foot-tips |
-| Joint flexion angles | 6 | knee/hip/ankle, left+right |
-| Frame-to-frame velocities | 36 (12 x 3) | first derivative of the coordinates above |
+The unmodified official GaitPT source is pinned to
+`4977618a36ef77ee9a2863c9f8e27ab862894d70`, with source/config SHA checks before
+import. The GREW checkpoint hash is pinned in `src/verification/artifacts.py`.
+Workstation export uses restricted `weights_only=True`; Nano loading uses numeric
+NPZ with `allow_pickle=False`, archive bounds, finite float32 tensors, and strict
+state keys/shapes. Legacy checkpoints are never loaded by this runtime.
 
-Sequences are resampled to 60 frames via linear interpolation on the raw
-landmarks *before* angles/velocities are computed (not after) -
-`GaitFeatureExtractor.sequence_to_model_input()` is the single place this
-happens, used by both offline video processing and the live camera buffer,
-specifically so the two paths can't drift apart.
+MediaPipe33 maps to COCO17 as
+`(0,2,5,7,8,11,12,13,14,15,16,23,24,25,26,27,28)`. The source model's 18-point
+order is `(0,1,3,0,2,4,5,7,9,6,8,10,11,13,15,12,14,16)`: the repeated nose is
+official behavior, not a synthesized neck. XY remains in displayed-image pixels
+and both coordinates are divided by image height. No hip centering or historical
+78-channel features enter GaitPT.
 
-## 4. Why identification uses the verification head, not embeddings+cosine
+The longest qualifying contiguous segment produces the official GREW two centered
+30-frame crops, including its final-frame exclusion. Crops run sequentially to
+bound activation memory. Normalize each crop embedding, average, normalize again.
+The real loaded model produced 256 dimensions and 4,484,384 parameters in the
+workstation smoke check; the implementation measures dimensions instead of fixing
+a model-independent interface to 256. No optimizer or training path exists.
 
-The model produces a 128-dim embedding via `GaitEncoder -> BiLSTM/Transformer
-fusion`, and there's a separate `IdentityVerifier` module built around
-cosine similarity between two projected embeddings. **Neither of those is
-what the checkpoint's `forward(mode='verification')` actually uses.**
+## Media and provisional quality
 
-Reading `models/full_pipeline.py`'s verification branch: it computes
-`diff`, `abs_diff`, and `product` directly from the two RAW 78-dim feature
-sequences (query vs. candidate), feeds that through a small 1D CNN
-(`diff_conv` + `diff_classifier`), and outputs `P(same person)`. The 128-dim
-embedding is computed alongside but never enters this calculation - it's
-there for diagnostics and the standalone classifier mode.
+FFprobe supplies each decoded frame's presentation timestamp, including variable
+frame timing. FFmpeg applies display rotation without altering source bytes.
+Missing detections retain their frame/time positions. There is no detected-frame
+compaction, interpolation or frame-rate resampling. Inputs are bounded to one video
+stream, 31–7,200 frames, <=120 seconds, and <=1920x1080 in either orientation.
 
-This isn't an oversight to fix; per the research team's own technical
-notes, the embedding-comparison approach was tried first and **collapsed
-during training** (the model learned to ignore the input). The
-difference-based CNN was what trained stably and produced the validated
-94.95% AUC-ROC / 0.7737 Youden's-J threshold. Building a new
-embedding+cosine matcher for this project would be building something never
-validated, using weights that were never optimized for it.
+The current engineering gate requires 31 fully observed consecutive frames spanning
+at least 0.8 seconds, visibility >=0.5 for mapped joints and heel/toe points, all
+these points inside the frame, adjacent timestamp gaps <=0.1 seconds, leg resolution
+>=0.15 image height, and foot motion relative to hips >=0.003 image height.
+Large observed pose jumps >0.2 image height are refused. These constants are
+**provisional**, not selected biometric thresholds or validated walking/track tests.
+MediaPipe's single-person tracker cannot count bystanders or certify stable identity.
+The CLI requires explicit operator review via `--single-walker-reviewed`; ambiguous
+or multi-person inputs must not be submitted. This port does not reproduce the
+research RTMPose multi-person/quality infrastructure or prove liveness.
 
-Consequence for identification: `GaitModel.identify()` (`src/model/gait_model.py`)
-batches the query against every enrolled signature and runs the real
-verification forward pass N times (one per candidate), taking the argmax
-above threshold. This is cheap - `diff_conv`/`diff_classifier` is a small
-CNN, and the model is ~850K parameters total - but it does mean matching
-cost scales with gallery size, unlike a cosine-similarity lookup. Fine for
-the gallery sizes this project targets (tens of people); would need
-revisiting if the gallery ever reached the thousands.
+## References, provenance and response boundary
 
-Caveat worth remembering: the 0.7737 threshold was calibrated for 1:1
-verification via 13-fold LOOCV. Open-set identification against a growing
-gallery changes the false-accept calculus (more candidates = more chances
-for a false positive above threshold). Re-derive this threshold once real
-enrollment data exists instead of trusting it indefinitely.
+`data/verification-v2.db` is separate from the old database. Each record retains an
+independent original take/hash, subject, role, recipe and normalized walk embedding.
+Only `WHERE subject = ?` queries retrieve references; there is no read-all-embeddings
+API. A normalized equal-weight centroid is calculated for the supplied claim only.
+Zero/nonfinite vectors and incompatible dimensions fail closed. The current database
+allows one recipe per original; use a new store and re-enroll after recipe changes.
 
-## 5. Normalization: deliberately none
+`data/recordings.json` reads existing `nano-raw-recordings-v1` records and writes
+`nano-recordings-v2`. Managed-study rows still require actual capture metadata,
+consent and disjoint development/calibration roles. The two-script USB workflow adds
+explicit **operational** enrollment/query rows outside those splits. Enrollment rows
+have the supplied owner; query rows require `subject_id: null`. The claim is never
+written as the unknown walker's true identity. Operational imports may have unknown
+capture date/view/session; registration timestamps are distinct, not invented capture
+metadata. Study rows retain their stricter requirements.
 
-`train.py` computes and saves `feature_stats` (per-dimension mean/std) into
-checkpoints when available, and the reference `inference.py` z-score
-normalizes with them. **This specific checkpoint has no `feature_stats`** -
-confirmed by loading it directly, not assumed. `inference.py` itself
-handles that by skipping normalization and printing a warning. That means
-the only code path this checkpoint's headline numbers (96.11% AUC on this
-variant, 90.32% accuracy) were produced through runs on **raw, unnormalized
-features**.
+Source bytes, reference owner/role and take reuse are checked before and after scoring.
+Managed study queries must match reference split role. An explicitly operational
+query is outside the study and can compare only the supplied claim's references;
+its diagnostics must not be used as labeled calibration/final-study trials. Reference
+roles for an enrolled ID remain disjoint. The same ID cannot be silently enrolled
+into operational and study roles in one store/registry. Declared derivatives and
+locked-final roles remain excluded. Registration is a trusted original-file assertion;
+bytes cannot identify undeclared re-encoded copies. This small registry is not the
+research capture registry, split lock or locked-test authorization system.
 
-An earlier plan in this project (`docs/phase-reports/PHASE_1_UPDATE.md`)
-proposed computing feature statistics from enrollment data and normalizing
-before inference. That was never implemented or tested against this
-checkpoint's actual behavior, and doing so now would silently shift the
-input distribution away from what the model was evaluated on. `config.yaml`
-sets `model.normalize_features: false`, and `GaitModel` raises rather than
-silently normalizing if that's ever flipped without a matching
-`feature_stats` mechanism being built first.
+`enroll.py --name` and `identify.py --identity` both default to a fresh USB-camera
+walk, consent attestation and supervised single-walker admission. `verify.py` shares
+the same verification command. Optional original `--video` input bypasses capture;
+unregistered files require explicit `--register-original` and consent. The model and
+pose graph are checked before a live walk. The same encoder instance handles the
+subsequent inference. Enrollment reports ENROLLED only after the SQLite transaction
+commits; a new process reads the same absolute config-resolved database path.
 
-## 6. Events / RPA boundary
+The recipe binds official source/config/checkpoint/numeric bundle, MediaPipe version
+and asset hashes/settings, raw variant, temporal/native/aggregation rules, runtime
+versions/device and implementation hashes. Different research RTMPose or Nano
+MediaPipe recipes must never share references or a numeric threshold by assumption.
 
-`src/events/identity_event.py` builds a plain `IdentityEvent` (person,
-similarity, threshold, timestamp, device_id) from an `IdentificationResult`
-and writes it to `outputs/events/*.json` (optionally POSTs to a webhook).
-Nothing upstream of this module knows RPA exists, and nothing in the event
-module imports torch/mediapipe - an actual RPA platform (UiPath, Power
-Automate, a webhook receiver, whatever gets chosen later) consumes these
-events without touching the ML pipeline.
+Public results/events contain request ID, supplied claim, status, verdict and message.
+Only `OK` has a Boolean; other statuses have null verdicts. There is no public score
+or alternative-person output. Opt-in private diagnostics retain query/reference
+take/hash, claim, role, recipe and cosine for offline evaluation. Source subject
+labels are obtained from the authorized registry by the evaluator, not inferred by
+production scoring. No accuracy/threshold is fitted by exporting diagnostics.
 
-## 7. Known limitations, stated plainly
+## Preservation and remaining gates
 
-- 13-subject training set; LOOCV was used to be honest about generalization,
-  but the model has still only ever seen 13 people's gait.
-- The identification threshold is a verification-task threshold reused for
-  identification (see #4's caveat).
-- No spoof/liveness detection - this is a biometric identification system,
-  not a security-hardened access-control system. Don't market it as one.
-- Feature engineering runs on CPU (MediaPipe); it's the pipeline's latency
-  bottleneck, more so than the ~850K-parameter model.
+The old 1:N application and standalone diagnostic scripts are archived byte-for-byte
+under `legacy/`; old `models/`, checkpoint, phase reports and user outputs are retained.
+The embedded `full_hybrid_best.pth` SHA is
+`345f58e6429c8456ea4e937ab5715378b8e5a7285b785c09ef87803c7d6a9904`.
+It is a different asset from the audited research shipped E0 and missing controlled
+LOSO bundle. Never label its old optimistic metrics as a replay of controlled E0.
+
+Frozen GaitPT is the first Nano implementation, not an empirically selected winner.
+GPGait++/GPGait and E0 remain research comparators; their Nano ports are not claimed.
+No pilot/cohort, scientific selection, calibrated policy, source-dataset reproduction,
+physical Nano validation or license clearance is manufactured by this migration.
+The copied research documents include historical links to reports that remain in
+the research repository; this repository's executed evidence is recorded separately
+in `NANO_MIGRATION_VALIDATION.md`.
+
+See [ADR-001](decisions/001-local-nano-verification.md) for the deployment decision
+and [deployment](DEPLOYMENT.md) for the policy/trust boundary.

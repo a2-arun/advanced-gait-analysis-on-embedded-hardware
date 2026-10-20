@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+.venv-*/
 venv/
 env/
 *.egg-info/
@@ -28,3 +29,13 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Verification V2: private recordings, templates and prepared numeric model bundles
+.cache/
+data/
+outputs/
+*.npz
+*.db-wal
+*.db-shm
+.pytest_cache/
+.ruff_cache/

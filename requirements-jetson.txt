@@ -1,14 +1,12 @@
-# Jetson Nano (JetPack 4.6.x, Ubuntu 18.04, Python 3.6, aarch64).
-# Install order matters - follow the "Jetson Nano" section of README.md:
-#   1) torch 1.10.0     -> NVIDIA's wheel (NOT on PyPI for this platform)
-#   2) mediapipe 0.8.5  -> PINTO0309's wheel (NOT on PyPI for Python 3.6)
-#   3) this file
-# OpenCV comes from JetPack itself (system cv2, with GStreamer) - do not pip it.
-
-numpy==1.19.4        # exact pin: the mediapipe 0.8.5 wheel is built against it
-protobuf==3.19.4     # last protobuf line mediapipe 0.8.x tolerates on Python 3.6
-pyyaml==6.0          # last release with a prebuilt cp36 aarch64 wheel
-tqdm
-dataclasses          # backport - Python 3.6 lacks it (stdlib since 3.7)
-attrs                # mediapipe 0.8.5 runtime deps (its wheel is installed --no-deps)
-absl-py
+# Original Nano / JetPack 4.6.x / Python 3.6. Install torch and MediaPipe
+# separately from the platform-specific wheels described in README.md.
+# Keep JetPack system OpenCV; do not install pip opencv-python on the Nano.
+numpy==1.19.4
+protobuf==3.19.4
+PyYAML==6.0
+einops==0.4.1
+absl-py==1.4.0
+attrs==22.2.0
+dataclasses==0.8; python_version < "3.7"
+six==1.16.0
+typing_extensions==4.1.1

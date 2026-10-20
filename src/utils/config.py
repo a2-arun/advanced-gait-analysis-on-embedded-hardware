@@ -1,9 +1,6 @@
-"""Loads config.yaml once and hands back a plain dict.
+"""Small shared config reader used by the standalone camera preview.
 
-No pydantic/dataclass schema on purpose - the config is small, every module
-reads only the section it needs, and a schema layer would just be another
-place for the real checkpoint hyperparameters to drift out of sync (see
-docs/ARCHITECTURE.md for why that already happened once).
+The verification command validates its V2 configuration in verification/cli.py.
 """
 
 from pathlib import Path
@@ -34,7 +31,7 @@ def load_config(path: Optional[Path] = None, force_reload: bool = False) -> dict
 
 
 def resolve_path(relative_path: str) -> Path:
-    """Resolve a config path (e.g. 'models/checkpoint/full_hybrid_best.pth')
+    """Resolve a camera/config resource path
     against the project root, so scripts work regardless of cwd."""
     p = Path(relative_path)
     return p if p.is_absolute() else PROJECT_ROOT / p
