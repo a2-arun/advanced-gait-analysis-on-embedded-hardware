@@ -18,6 +18,17 @@ Evidence notation: `path:line` identifies source at the audited revision. Paths 
 
 No other repository was accessed. Research references embedded in copied documents were read as local text only. No external links were visited, and no repository content or invention disclosure was uploaded. Existing binary checkpoints and pose pickle were not deserialized. Participant identities, individual scores, vectors, footage, credentials, and Git-author contact details are deliberately excluded.
 
+## 0. Update — research-to-Nano model synchronization (21 October 2026, uncommitted work on top of `d97d2ce`)
+
+This section supersedes the statements below that conflict with it; the rest of the audit is unchanged and still describes the baseline.
+
+* **Authority.** Research source of truth is branch `origin/feat/gait-verification-v2` (`eabfb08`) of `deepfake-detection`; its checked-out `main` has no gait source. Details, matrix and numbers: `docs/RESEARCH_TO_JETSON_MODEL_INTEGRATION.md`; future-model steps: `docs/RESEARCH_MODEL_DEPLOYMENT_CHECKLIST.md`.
+* **Added.** `src/verification/deployment.py` (`nano-deployment-contract-v1`, strict validation, semantic id), `GaitBackend`/`backend_for` in `backend.py`, `src/verification/parity.py` + `scripts/make_parity_fixture.py` + a research-derived fixture under `tests/verification/fixtures/`.
+* **Changed.** The recipe (policy/enrollment binding) is now the *semantic* identity (contract + hashes of backend/media/contract/deployment code); torch/CUDA/ffmpeg/python/device and store/service hashes live in `details['runtime']` and are stored per reference. Section 12/13 statements that the recipe mixes runtime versions or that the store allows one recipe per original are obsolete: the store is schema v2 (`PRAGMA user_version=2`, `(take_id, recipe)`/`(source_hash, recipe)` uniqueness, original table kept as `reference_v1`, migrated rows inert). `prototype_score()` was extracted from `Verifier.verify` without changing the math.
+* **Evidence.** 81 tests pass (1 model-only parity test skipped without `GAIT_PARITY_GAITPT_SOURCE`; 15 pass in `test_parity.py` on CPU and CUDA when set) on a workstation interpreter borrowed from the research checkout, replacing the earlier "pytest unavailable" status for the engineering suite. Verified against research code: GaitPT checkpoint/source/config hashes, model-input tensors for identical COCO17 joints, model-only embeddings (max abs diff 2.2e-8 CPU / 4.6e-6 CUDA), centroid and cosine arithmetic.
+* **Known differences (unresolved, decide with final research model).** RTMPose-COCO17 vs MediaPipe 0.8.5 pose source; research per-2-second-window encoding and mean vs one whole-run encode (cosine 0.99989 on the synthetic fixture); quality thresholds. End-to-end parity is **unverified**; still no Nano run, no policy, no threshold, no final model.
+* **Next step.** Select the final research model, export its contract/weights/fixture (checklist), and measure pose-source differences on paired real video.
+
 ## 1. Executive summary
 
 This checkout implements a **local, batch, skeleton-based 1:1 claimed-identity gait verification application** intended for an original Jetson Nano. It has real enrollment and verification orchestration, SQLite reference storage, USB recording, video decoding, a MediaPipe pose path, a frozen GaitPT-GREW adapter, cosine comparison, explicit status handling, and a gate for an externally approved decision policy. These mechanisms are implemented in source; their existence is not evidence of successful execution on the target hardware.

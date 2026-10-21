@@ -80,8 +80,10 @@ research RTMPose multi-person/quality infrastructure or prove liveness.
 independent original take/hash, subject, role, recipe and normalized walk embedding.
 Only `WHERE subject = ?` queries retrieve references; there is no read-all-embeddings
 API. A normalized equal-weight centroid is calculated for the supplied claim only.
-Zero/nonfinite vectors and incompatible dimensions fail closed. The current database
-allows one recipe per original; use a new store and re-enroll after recipe changes.
+Zero/nonfinite vectors and incompatible dimensions fail closed. The store (schema v2) allows one
+reference per recipe per original but never a second owner; migrated pre-contract rows
+are inert. After a model change use a new bundle/database and re-enroll or reprocess the
+preserved originals.
 
 `data/recordings.json` reads existing `nano-raw-recordings-v1` records and writes
 `nano-recordings-v2`. Managed-study rows still require actual capture metadata,
@@ -110,9 +112,12 @@ pose graph are checked before a live walk. The same encoder instance handles the
 subsequent inference. Enrollment reports ENROLLED only after the SQLite transaction
 commits; a new process reads the same absolute config-resolved database path.
 
-The recipe binds official source/config/checkpoint/numeric bundle, MediaPipe version
-and asset hashes/settings, raw variant, temporal/native/aggregation rules, runtime
-versions/device and implementation hashes. Different research RTMPose or Nano
+The recipe is the semantic identity of the `nano-deployment-contract-v1`: official
+source/config/checkpoint/numeric bundle, MediaPipe version and asset hashes/settings,
+raw variant, temporal/native/aggregation/similarity rules and the hashes of the
+pixel-to-embedding code. Torch/CUDA/ffmpeg/python/device versions are recorded as
+runtime provenance per reference and do not decide compatibility. See
+[research integration](RESEARCH_TO_JETSON_MODEL_INTEGRATION.md). Different research RTMPose or Nano
 MediaPipe recipes must never share references or a numeric threshold by assumption.
 
 Public results/events contain request ID, supplied claim, status, verdict and message.

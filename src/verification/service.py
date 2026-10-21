@@ -23,6 +23,12 @@ def response(claim, status, verdict=None):
                 claimed_subject_id=claim, status=status, verdict=verdict, message=message)
 
 
+def prototype_score(vector, embeddings):
+    """Cosine between a walk embedding and the normalized equal-weight reference centroid."""
+    prototype = normalize(np.stack(embeddings).mean(axis=0))
+    return float(np.dot(normalize(vector), prototype))
+
+
 class Verifier:
     def __init__(self, store, registry, recipe, encoder_factory, policy=None, logger=None,
                  diagnostic_sink=None):
@@ -49,9 +55,7 @@ class Verifier:
             encoder = self.encoder_factory()
             if encoder.recipe != self.recipe:
                 raise ValueError('Encoder recipe changed')
-            vector = normalize(encoder.encode(video))
-            prototype = normalize(np.stack([r['embedding'] for r in references]).mean(axis=0))
-            score = float(np.dot(vector, prototype))
+            score = prototype_score(encoder.encode(video), [r['embedding'] for r in references])
             # Recheck sources after processing as well as before it.
             if self.registry.resolve(video) != query:
                 raise ValueError('Query changed during processing')

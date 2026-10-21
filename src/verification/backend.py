@@ -9,6 +9,9 @@ import numpy as np
 
 from .artifacts import check_bundle, load_arrays
 from .contract import QUALITY_RECIPE, fingerprint, native_crops, normalize, sha256_file
+from .deployment import (GAITPT_EMBEDDING_DIM, GAITPT_INPUT_SHAPE, UnsupportedModel,
+                         check_embedding, check_model_input, gaitpt_grew_contract,
+                         semantic_identity)
 from .media import inspect_video, video_frames
 
 POSE_SETTINGS = dict(static_image_mode=False, model_complexity=0, smooth_landmarks=False,
@@ -34,7 +37,19 @@ def pose_runtime_smoke():
         pose.process(np.zeros((480, 640, 3), dtype=np.uint8))
 
 
+# Pixel->embedding code defines the representation; store/service/CLI do not.
+SEMANTIC_MODULES = ('backend', 'media', 'contract', 'deployment')
+RUNTIME_MODULES = ('store', 'service')
+
+
+def module_hashes(names):
+    return {name: sha256_file(Path(__file__).parent / (name + '.py')) for name in names}
+
+
 def runtime_recipe(source, bundle, device):
+    """Returns (recipe, details). The recipe is the SEMANTIC identity only: enrollments and
+    policies bind to it. Torch/CUDA/ffmpeg/python/device and store/service code are recorded
+    in details['runtime'] for provenance and never decide biometric compatibility."""
     if platform.machine() == 'aarch64':
         from .environment import require_nano_environment
         require_nano_environment()
@@ -43,22 +58,58 @@ def runtime_recipe(source, bundle, device):
     import einops
     manifest = check_bundle(source, bundle)
     ffmpeg = subprocess.check_output(['ffmpeg', '-version']).decode('utf8').splitlines()[0]
+    pose_hashes = [sha256_file(p) for p in pose_assets()]
+    contract = gaitpt_grew_contract(manifest, dict(version=mp.__version__, settings=POSE_SETTINGS,
+                                                   asset_sha256=pose_hashes))
+    recipe = semantic_identity(contract, module_hashes(SEMANTIC_MODULES))
+    runtime = dict(torch=torch.__version__, numpy=np.__version__, einops=einops.__version__,
+                   cuda=torch.version.cuda, cudnn=torch.backends.cudnn.version(), device=device,
+                   ffmpeg=ffmpeg, machine=platform.machine(), python=platform.python_version(),
+                   implementation=module_hashes(RUNTIME_MODULES))
     details = dict(model=manifest, pose='mediapipe-solutions-single-person-lite',
-                   mediapipe=mp.__version__, pose_settings=POSE_SETTINGS,
-                   pose_assets=[sha256_file(p) for p in pose_assets()],
+                   mediapipe=mp.__version__, pose_settings=POSE_SETTINGS, pose_assets=pose_hashes,
                    quality=QUALITY_RECIPE, native='grew-two-center30-height-v1',
-                   aggregation='normalize-crops-mean-normalize-walk-centroid-v1',
-                   variant='raw', torch=torch.__version__, numpy=np.__version__,
-                   einops=einops.__version__, cuda=torch.version.cuda,
-                   cudnn=torch.backends.cudnn.version(), device=device, ffmpeg=ffmpeg,
-                   machine=platform.machine(), python=platform.python_version(),
-                   implementation={name: sha256_file(Path(__file__).parent / (name + '.py'))
-                                   for name in ('backend', 'media', 'contract', 'store', 'service')},
-                   input_assumption='operator-checked-one-walker-no-bystanders')
-    return fingerprint(details), details
+                   aggregation='normalize-crops-mean-normalize-walk-centroid-v1', variant='raw',
+                   input_assumption='operator-checked-one-walker-no-bystanders',
+                   contract=contract, runtime=runtime, runtime_fingerprint=fingerprint(runtime),
+                   implementation=module_hashes(SEMANTIC_MODULES))
+    return recipe, details
 
 
-class LocalGaitPT:
+class GaitBackend:
+    """Stable surface the CLI/verifier rely on. A future selected model implements this
+    (plus a contract with its own family) without touching storage, capture or policy."""
+    family = None
+    recipe = None
+    embedding_dim = None
+
+    @staticmethod
+    def validate_artifacts(source, bundle):
+        raise NotImplementedError
+
+    def encode_batch(self, batch):
+        raise NotImplementedError
+
+    def encode(self, video):
+        raise NotImplementedError
+
+
+def backend_for(contract):
+    """Pick the implementation a contract names; refuse families that are not ported."""
+    from .deployment import validate_contract
+    family = validate_contract(contract)['model']['family']
+    if family not in BACKENDS:
+        raise UnsupportedModel('No Nano backend is implemented for model family ' + family)
+    return BACKENDS[family]
+
+
+class LocalGaitPT(GaitBackend):
+    family = 'gaitpt'
+
+    @staticmethod
+    def validate_artifacts(source, bundle):
+        return check_bundle(source, bundle)
+
     def __init__(self, source, bundle, recipe, device='cuda'):
         import torch
         import yaml
@@ -87,17 +138,14 @@ class LocalGaitPT:
 
     def encode_batch(self, batch):
         import torch
-        if (batch.shape != (2, 30, 18, 2) or batch.dtype != np.float32
-                or not np.isfinite(batch).all()):
-            raise ValueError('Invalid native GaitPT crop batch')
+        check_model_input(batch, GAITPT_INPUT_SHAPE)
         # Process the two native crops sequentially to bound Nano activation memory.
         self.model.eval()
         with torch.no_grad():
             outputs = [self.model(torch.from_numpy(crop[None]).to(self.device))
                        .cpu().numpy()[0] for crop in batch]
         vector = normalize(np.stack([normalize(v) for v in outputs]).mean(axis=0))
-        if self.embedding_dim is not None and len(vector) != self.embedding_dim:
-            raise ValueError('Embedding dimension changed')
+        check_embedding(vector, GAITPT_EMBEDDING_DIM)
         self.embedding_dim = len(vector)
         return vector
 
@@ -120,3 +168,6 @@ class LocalGaitPT:
         finally:
             frames.close()
         return self.encode_batch(native_crops(xy, confidence, pts, width, height))
+
+
+BACKENDS = {'gaitpt': LocalGaitPT}

@@ -220,6 +220,10 @@ def main(argv=None):
                 encoder = LocalGaitPT(cfg['source_dir'], cfg['bundle_dir'], recipe, cfg['device'])
             return encoder
         if args.command == 'verify' and not store.claim(args.claimed_id, recipe):
+            stale = store.incompatible_count(args.claimed_id, recipe)
+            if stale:
+                logger.warning('Claim has %d reference(s) from another or legacy recipe; '
+                               're-enroll or reprocess the preserved originals', stale)
             return emit_verification(cfg, response(args.claimed_id, 'CLAIM_NOT_ENROLLED'))
         if not args.video:
             factory()  # Reject broken weights/CUDA before asking the user to walk.
@@ -242,7 +246,7 @@ def main(argv=None):
         if registry.resolve(args.video) != row:
             raise ValueError('Original changed during enrollment')
         store.add(args.subject_id, row['original_take_id'], row['sha256'], recipe,
-                  embedding, row['role'])
+                  embedding, row['role'], details.get('runtime_fingerprint'))
         print(json.dumps({'status': 'ENROLLED', 'subject_id': args.subject_id,
                           'take_id': row['original_take_id'], 'recipe': recipe,
                           'database': cfg['database'],
