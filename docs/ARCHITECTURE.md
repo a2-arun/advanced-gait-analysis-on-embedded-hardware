@@ -127,6 +127,27 @@ take/hash, claim, role, recipe and cosine for offline evaluation. Source subject
 labels are obtained from the authorized registry by the evaluator, not inferred by
 production scoring. No accuracy/threshold is fitted by exporting diagnostics.
 
+## Model slot, lab tooling and the no-final-model state (21 October 2026)
+
+No final research model exists, so enrollment and verification are gated by an explicit
+**model slot** (`src/verification/model_slot.py`, `config.yaml: model_slot_dir`). A package is
+reported through six separate stages — discovered, structurally valid, runtime compatible,
+parity tested (Nano evidence), approved (research-owner record), active — and only an
+explicitly activated package that passes the first five on the Nano can run. Otherwise
+`enroll`/`verify` return `MODEL_NOT_DEPLOYED` (or `MODEL_INCOMPATIBLE` when the runtime
+contract differs from the activated package), with a null verdict and no fallback. The
+provisional GaitPT bundle is a `development_only` baseline reachable only through
+`--development-baseline`; it is not approvable. Runtime compatibility is a section-by-section
+comparison with what this build implements (currently only the official GaitPT-GREW +
+MediaPipe 0.8.5 recipe), so other models fail closed until a backend is written.
+
+`scripts/lab.py` adds model-independent hardware tooling (preflight, camera diagnostics, pose
+diagnostics, database readiness, model slot, HDMI display) around — not inside — the
+recipe-defining modules (`backend`, `media`, `contract`, `deployment` are unchanged and still
+define the recipe hash). Capture, SQLite storage and the diagnostics never import a pose
+backend; the only coupling is `LocalGaitPT.encode`, whose MediaPipe use is named by the
+contract's `pose` section. Diagnostics (`data/diagnostics/`) are never registered as originals.
+
 ## Preservation and remaining gates
 
 The old 1:N application and standalone diagnostic scripts are archived byte-for-byte

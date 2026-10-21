@@ -3,6 +3,7 @@ import uuid
 import numpy as np
 
 from .contract import InsufficientGait, identifier, normalize
+from .model_slot import ModelIncompatible, ModelNotDeployed
 from .policy import decide
 
 MESSAGES = {'OK': 'Gait supports the claimed identity.',
@@ -10,7 +11,9 @@ MESSAGES = {'OK': 'Gait supports the claimed identity.',
             'INSUFFICIENT_GAIT': 'Insufficient usable walking gait; recapture.',
             'INVALID_INPUT': 'Invalid input, source lineage, or claimed identity.',
             'PROCESSING_ERROR': 'Local processing failed; inspect the private operator log.',
-            'POLICY_NOT_READY': 'No approved calibration policy for this Nano recipe.'}
+            'POLICY_NOT_READY': 'No approved calibration policy for this Nano recipe.',
+            'MODEL_NOT_DEPLOYED': 'No approved gait model is activated on this Nano.',
+            'MODEL_INCOMPATIBLE': 'The activated model or preprocessing does not match this claim.'}
 
 
 def response(claim, status, verdict=None):
@@ -54,7 +57,7 @@ class Verifier:
                     return response(claimed_id, 'INVALID_INPUT')
             encoder = self.encoder_factory()
             if encoder.recipe != self.recipe:
-                raise ValueError('Encoder recipe changed')
+                raise ModelIncompatible('Encoder recipe changed')
             score = prototype_score(encoder.encode(video), [r['embedding'] for r in references])
             # Recheck sources after processing as well as before it.
             if self.registry.resolve(video) != query:
@@ -74,6 +77,10 @@ class Verifier:
             return result
         except InsufficientGait:
             return response(claimed_id, 'INSUFFICIENT_GAIT')
+        except ModelNotDeployed:
+            return response(claimed_id, 'MODEL_NOT_DEPLOYED')
+        except ModelIncompatible:
+            return response(claimed_id, 'MODEL_INCOMPATIBLE')
         except Exception:
             if self.logger:
                 self.logger.exception('Verification processing failed')

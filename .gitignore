@@ -44,3 +44,5 @@ docs/gait_verification/GAIT_VERIFICATION_REARCHITECTURE_HANDOFF.md
 docs/gait_verification/GAIT_VERIFICATION_TECHNICAL_PRD.md
 docs/RESEARCH_TO_JETSON_MODEL_INTEGRATION.md
 docs/gait_verification/
+# Portable lab kits built by scripts/build_lab_kit.py
+dist/

@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from lab_helpers import allow_development_model
 
 from src.verification.cli import main
 from src.verification.registry import RecordingRegistry
@@ -30,6 +31,7 @@ def setup_workflow(tmp_path, monkeypatch):
             pass
         def encode(self, video):
             return np.array([1., 0.])
+    allow_development_model(monkeypatch)
     monkeypatch.setattr(capture, 'capture_video', fake_camera)
     monkeypatch.setattr(backend, 'runtime_recipe', lambda *args: (Encoder.recipe, {}))
     monkeypatch.setattr(backend, 'LocalGaitPT', Encoder)

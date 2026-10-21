@@ -15,6 +15,13 @@ the capture pilot and new-cohort accuracy remain unvalidated. See
 
 ## Daily use: enroll, then verify the claimed identity
 
+> **Current state (21 Oct 2026): no final gait model is installed.** `enroll.py` and `identify.py`
+> return `MODEL_NOT_DEPLOYED` (null verdict) until a qualified model package is explicitly
+> activated (`scripts/lab.py model ...`, see `docs/FINAL_MODEL_ACTIVATION_RUNBOOK.md`). Hardware,
+> camera, pose, database and display readiness: `python scripts/lab.py preflight` and
+> `docs/JETSON_NANO_LAB_RUNBOOK.md`. For engineering checks with the provisional GaitPT bundle
+> add `--development-baseline` (it is not the final model; use a separate config/database).
+
 After completing the one-time Nano setup below, activate its `.venv` and run:
 
 ```bash

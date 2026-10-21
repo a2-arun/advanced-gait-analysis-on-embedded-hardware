@@ -1,7 +1,7 @@
 # Local verification V2. Paths resolve relative to this config file.
 schema_version: 2
 source_dir: .cache/GaitPT
-bundle_dir: .cache/gaitpt-grew-npz
+bundle_dir: .cache/gaitpt-grew-npz  # provisional GaitPT: used only with --development-baseline, never the final model
 device: cuda  # explicit cpu is for workstation engineering only; no automatic fallback
 database: data/verification-v2.db
 recordings: data/recordings.json
@@ -9,6 +9,9 @@ policy: null  # no threshold selected; successful usable claims return POLICY_NO
 events_dir: outputs/verification-events
 log_file: outputs/logs/verification.log
 capture_dir: data/raw/camera
+model_slot_dir: .cache/model-slot  # installed final-model packages; activation is explicit (lab.py model ...)
+diagnostics_dir: data/diagnostics  # camera/pose engineering diagnostics, kept apart from originals
+reports_dir: outputs/lab-reports  # preflight JSON/Markdown
 
 # USB defaults used by enroll.py, identify.py/verify.py and test_camera.py.
 camera:

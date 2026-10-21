@@ -16,6 +16,16 @@ TABLE = ('CREATE TABLE reference ('
          'kind TEXT, runtime TEXT, UNIQUE (take_id, recipe), UNIQUE (source_hash, recipe))')
 
 
+class ClosingConnection(sqlite3.Connection):
+    """`with` commits or rolls back and then closes, so no connection outlives its operation."""
+
+    def __exit__(self, *exc):
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self.close()
+
+
 class EnrollmentStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -28,7 +38,7 @@ class EnrollmentStore:
         self.migrate()
 
     def connect(self):
-        return sqlite3.connect(str(self.path))
+        return sqlite3.connect(str(self.path), timeout=10, factory=ClosingConnection)
 
     def migrate(self):
         """v0/v1 -> v2 in one transaction. The original table is kept as reference_v1."""

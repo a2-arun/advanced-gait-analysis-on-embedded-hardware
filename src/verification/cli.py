@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .contract import InsufficientGait, identifier
+from .model_slot import ModelIncompatible, ModelNotDeployed
 from .registry import RecordingRegistry, private_json
 from .service import Verifier, response
 from .store import EnrollmentStore
@@ -23,7 +24,11 @@ def configuration(path):
     if value['schema_version'] != 2:
         raise ValueError('Use verification config schema version 2')
     value.setdefault('capture_dir', 'data/raw/camera')
-    for key in ('source_dir', 'bundle_dir', 'database', 'recordings', 'events_dir', 'log_file', 'capture_dir'):
+    value.setdefault('model_slot_dir', '.cache/model-slot')
+    value.setdefault('diagnostics_dir', 'data/diagnostics')
+    value.setdefault('reports_dir', 'outputs/lab-reports')
+    for key in ('source_dir', 'bundle_dir', 'database', 'recordings', 'events_dir', 'log_file',
+                'capture_dir', 'model_slot_dir', 'diagnostics_dir', 'reports_dir'):
         value[key] = str((path.parent / value[key]).resolve())
     if value.get('policy'):
         value['policy'] = str((path.parent / value['policy']).resolve())
@@ -52,6 +57,34 @@ def emit_verification(cfg, result):
     private_json(Path(cfg['events_dir']) / (result['request_id'] + '.json'), result)
     print(json.dumps(result))
     return 0 if result['status'] == 'OK' else 2
+
+
+def resolve_model(args, cfg):
+    """(bundle_dir, active package or None). Only an explicitly activated, fully qualified
+    package or the explicitly requested development baseline may run; there is no fallback."""
+    if args.development_baseline:
+        print('WARNING: DEVELOPMENT BASELINE (provisional GaitPT, not an approved final model)',
+              file=sys.stderr)
+        return cfg['bundle_dir'], None
+    from . import environment, model_slot
+    active = model_slot.active_package(cfg['model_slot_dir'],
+                                       environment.collect_nano_environment(), cfg['source_dir'])
+    return active['path'], active
+
+
+def model_gate(args, cfg):
+    try:
+        return resolve_model(args, cfg) + (None,)
+    except ModelNotDeployed:
+        return None, None, 'MODEL_NOT_DEPLOYED'
+
+
+def refuse(cfg, args, status):
+    result = response(getattr(args, 'claimed_id', getattr(args, 'subject_id', None)), status)
+    if args.command == 'verify':
+        return emit_verification(cfg, result)
+    print(json.dumps(result))
+    return 2
 
 
 def protect_originals(cfg, registry, extra_sources=()):
@@ -104,6 +137,8 @@ def main(argv=None):
         sub = commands.add_parser(command)
         sub.add_argument('--config')
         if command in ('enroll', 'verify'):
+            sub.add_argument('--development-baseline', action='store_true',
+                             help='Run the provisional GaitPT bundle in config bundle_dir; never final')
             sub.add_argument('--video', help='Use an original video instead of recording the USB camera')
             sub.add_argument('--seconds', type=int, default=30)
             sub.add_argument('--device', help='USB camera device; defaults to config camera.device_id')
@@ -161,6 +196,7 @@ def main(argv=None):
             return 0
         logger = operator_logger(cfg['log_file'])
         store = None
+        bundle, active = cfg['bundle_dir'], None
         if args.command in ('verify', 'enroll'):
             try:
                 identifier(getattr(args, 'claimed_id', getattr(args, 'subject_id', None)))
@@ -175,9 +211,17 @@ def main(argv=None):
                     return emit_verification(cfg, result)
                 print(json.dumps(result))
                 return 2
+            if args.command == 'enroll':  # Refuse before any database, registry or camera access.
+                bundle, active, status = model_gate(args, cfg)
+                if status:
+                    return refuse(cfg, args, status)
             store = EnrollmentStore(cfg['database'])
-            if args.command == 'verify' and not store.has_claim(args.claimed_id):
-                return emit_verification(cfg, response(args.claimed_id, 'CLAIM_NOT_ENROLLED'))
+            if args.command == 'verify':
+                if not store.has_claim(args.claimed_id):
+                    return emit_verification(cfg, response(args.claimed_id, 'CLAIM_NOT_ENROLLED'))
+                bundle, active, status = model_gate(args, cfg)
+                if status:
+                    return refuse(cfg, args, status)
             if args.video:
                 try:
                     row = existing_recording(args, registry)
@@ -191,7 +235,14 @@ def main(argv=None):
                     print(json.dumps(result))
                     return 2
         from .backend import LocalGaitPT, runtime_recipe
-        recipe, details = runtime_recipe(cfg['source_dir'], cfg['bundle_dir'], cfg['device'])
+        recipe, details = runtime_recipe(cfg['source_dir'], bundle, cfg['device'])
+        if active:
+            from .deployment import semantic_id
+            try:
+                if semantic_id(details['contract']) != active['semantic_id']:
+                    raise ModelIncompatible('Runtime contract differs from the activated package')
+            except (KeyError, ValueError):
+                return refuse(cfg, args, 'MODEL_INCOMPATIBLE')
         if args.command in ('recipe', 'check'):
             import torch
             if args.command == 'check':
@@ -199,7 +250,7 @@ def main(argv=None):
                     model = Path('/proc/device-tree/model').read_text().strip('\x00\n')
                     if 'Jetson Nano' not in model or 'Orin' in model:
                         raise RuntimeError('Original Jetson Nano hardware required')
-                encoder = LocalGaitPT(cfg['source_dir'], cfg['bundle_dir'], recipe, cfg['device'])
+                encoder = LocalGaitPT(cfg['source_dir'], bundle, recipe, cfg['device'])
                 import numpy as np
                 batch = np.random.RandomState(7).uniform(0, 1, (2, 30, 18, 2)).astype(np.float32)
                 a, b = encoder.encode_batch(batch), encoder.encode_batch(batch)
@@ -217,7 +268,7 @@ def main(argv=None):
         def factory():
             nonlocal encoder
             if encoder is None:
-                encoder = LocalGaitPT(cfg['source_dir'], cfg['bundle_dir'], recipe, cfg['device'])
+                encoder = LocalGaitPT(cfg['source_dir'], bundle, recipe, cfg['device'])
             return encoder
         if args.command == 'verify' and not store.claim(args.claimed_id, recipe):
             stale = store.incompatible_count(args.claimed_id, recipe)

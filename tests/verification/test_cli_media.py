@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from lab_helpers import allow_development_model
 
 from src.verification.cli import main
 from src.verification.contract import InsufficientGait
@@ -157,6 +158,7 @@ def test_cli_enrollment_query_and_private_diagnostics_with_synthetic_backend(tmp
             self.recipe = value
         def encode(self, video):
             return np.array([0., 1.]) if Path(video).name == 'ref2.mp4' else np.array([1., 0.])
+    allow_development_model(monkeypatch)
     monkeypatch.setattr(backend, 'runtime_recipe', lambda *args: (recipe, {}))
     monkeypatch.setattr(backend, 'LocalGaitPT', Encoder)
     cfg = config(tmp_path)
